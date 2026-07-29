@@ -27,3 +27,5 @@ catalog.json
 /workflows/*
 !/workflows/sample_a+b=c.json
 !/workflows/sample_custom.json
+
+/models/
