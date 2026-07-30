@@ -65,71 +65,287 @@ python main.py workflows/sample_custom.json
 python catalog.py
 ```
 
-## Connect the Browser Studio
+## Start the Local Workflow Studio
 
-Start the local bridge before opening the browser workflow editor:
+InfraX Studio uses the same basic structure as a portable ComfyUI installation:
+the Python process on this PC serves both the browser GUI and the local
+workflow API. It does not need a browser extension or a second local web
+server.
+
+The installed tool version is stored in the root `VERSION` file. The local
+health API and the served HTML both expose that same semantic version so the
+hosted Pipeline site can tell the user when a newer ZIP is available.
+
+On Windows, double-click:
+
+```text
+run_studio.bat
+```
+
+The launcher uses Python in this order:
+
+1. `python_embeded\python.exe` (portable bundle)
+2. `.venv\Scripts\python.exe` (development virtual environment)
+3. `python` available on `PATH`
+
+You can also start it from PowerShell:
 
 ```powershell
 python studio_bridge.py
 ```
 
-The bridge listens only on `http://127.0.0.1:8765`. It prints a new pairing
-token every time it starts. Copy that token into the Studio's **local tool
-pairing** field. The token is intentionally not saved to disk.
+The process listens only on `http://127.0.0.1:8765` and opens that address in
+the default browser automatically. `127.0.0.1` means only the current PC can
+connect to it; the Studio is not exposed to the LAN or Internet. Keep the
+terminal window open while using the Studio, and press `Ctrl+C` to stop it.
+Only one Studio process can use a port. Starting it twice reports that the
+Studio is already running instead of sharing the port between processes.
 
-Set the Studio's **execution tool folder** to the absolute path of the
-`InfraX-Pipeline-Tool` folder. Leaving it empty selects the folder containing
-`studio_bridge.py`. After the bridge validates `catalog.py`, `main.py`, and the
-`workflow` package, the Studio stores the canonical path in account-scoped
-browser local storage. Every page load creates a new in-memory tool context
-before catalog or workflow requests are sent. Context IDs are not persisted,
-and separate tabs can safely use different tool folders.
+### What happens while the Studio is running
 
-After pairing, the Studio uses the bridge as follows:
+1. The local Python process serves the packaged Workflow Studio screen.
+2. The screen requests a catalog refresh. Python runs `catalog.py`, then reads
+   the updated `catalog.json` and shows the discovered nodes.
+3. Canvas edits automatically keep one current draft in browser local storage.
+   This protects in-progress edits but does not create a workflow file.
+4. **File Save** writes UTF-8 JSON atomically into the local `workflows/`
+   folder.
+5. Opening another JSON file replaces the one browser draft and editing
+   continues from that workflow.
+6. **Run** invokes `main.py workflows/<filename>.json` and returns the actual
+   process output to the Studio.
 
-1. It calls `POST /tool-contexts` with the saved execution tool path.
-2. On first connection it calls `POST /catalog/refresh`. The bridge runs
-   `catalog.py` in that tool context and returns the newly written
-   `catalog.json`.
-3. Browser edits continue to auto-save a single draft in browser local storage.
-4. The explicit workflow save action writes UTF-8 JSON atomically under
-   `workflows/`.
-5. A saved workflow can be run through `main.py` from the Studio.
+The GUI and local API have the same loopback address, so local mode creates a
+temporary `HttpOnly`, `SameSite=Strict` session cookie for `/local-api` and a
+separate HttpOnly cookie scoped to `/api`. The secret is not exposed to page
+JavaScript. There is no pairing-token field to copy and no browser extension
+to install. The packaged GUI also serves its Material Symbols font locally;
+opening and editing workflows does not depend on a font CDN.
 
-The bridge does not provide arbitrary command or filesystem access. Workflow
-filenames must be plain `.json` basenames, request bodies are size-limited, and
-catalog generation and workflow execution have timeouts. Browser requests must
-come from an exact allowed Origin and include:
+### Startup options
 
-```http
-Authorization: Bearer <pairing-token>
-X-InfraX-Tool-Context: <temporary-context-id>
-```
-
-The built-in Origin list includes `https://106.254.226.206`,
-`https://infrax.iptime.org`, and common local development ports. The Studio
-path (for example `/pipeline`) is not part of the browser Origin. If a
-different Studio Origin is needed, add that exact Origin when starting the
-bridge:
+Pass options after `run_studio.bat`, or after `python studio_bridge.py`:
 
 ```powershell
-python studio_bridge.py --allow-origin https://studio.example
+# Start without opening a browser tab
+run_studio.bat --no-browser
+
+# Use a different loopback port
+run_studio.bat --port 8877
+
+# Connect Marketplace/account requests to the hosted InfraX platform
+run_studio.bat --platform-api-base https://infrax.iptime.org/pipeline/api
+
+# Work locally without contacting the hosted platform
+run_studio.bat --offline
+
+# Run only the legacy local API, without serving the packaged GUI
+run_studio.bat --api-only
 ```
 
-Available endpoints:
+The packaged `tool-config.json` supplies the default hosted API:
+
+```json
+{
+  "platformApiBase": "https://infrax.iptime.org/pipeline/api"
+}
+```
+
+The API address is selected in this order: `--platform-api-base`, the
+`INFRAX_PLATFORM_API_BASE` environment variable, then `tool-config.json`.
+Every configured address must use HTTPS and include an API path. `--offline`
+ignores all three sources.
+
+Catalog discovery, workflow file save, workflow selection, and execution
+always stay on the local Python process. Starting the Studio never makes a
+required network request. If the hosted server is unavailable—or when
+`--offline` is used—the local catalog, canvas, workflow files, and `main.py`
+execution continue to work. Only account, Marketplace browsing, upload, and
+update checks are unavailable.
+
+### Hosted API proxy and account connection
+
+The local HTML always uses same-origin `/api` URLs. The Python process proxies
+only this fixed allowlist to the configured HTTPS platform:
+
+- health, session, and Pipeline Tool release checks/downloads;
+- Marketplace workflow and module list/item reads and uploads;
+- Marketplace module ZIP downloads;
+- the local-connect PKCE exchange.
+
+Arbitrary upstream paths, query strings, methods, hosts, and request headers
+are rejected. The upstream connection has a five-second inactivity timeout
+and runs in its own request thread, so a slow or unavailable platform does not
+block catalog, workflow, or execution requests.
+Marketplace deletion is intentionally not exposed through the local proxy;
+delete shared items from the hosted site instead.
+
+During `POST /api/local-connect/exchange`, the bridge forwards the one-time
+code, PKCE verifier, state, and exact loopback return origin. It keeps the
+returned `ixm_...` Marketplace token only in Python process memory and removes
+`accessToken` from the browser response. Subsequent allowlisted requests get
+the Authorization header inside the bridge. The token is cleared on
+authorization failure and when the process stops; it is never written to
+browser storage or disk.
+
+API-only mode retains the earlier remote-browser integration. In that mode the
+terminal prints a temporary pairing token, browser requests must come from an
+allowed exact Origin, and a new tool context is created for the selected
+execution folder. Add an Origin when needed:
+
+```powershell
+run_studio.bat --api-only --allow-origin https://studio.example
+```
+
+Local workflow endpoints are also available below `/local-api/` when the GUI
+is served:
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/health` | Check whether the bridge is running; no token required |
-| `POST` | `/tool-contexts` | Validate a tool folder and create a temporary context |
-| `POST` | `/catalog/refresh` | Run `catalog.py` and return the updated catalog |
-| `GET` | `/catalog` | Read the current `catalog.json` |
-| `GET` | `/workflows` | List valid JSON files under `workflows/` |
-| `GET` | `/workflows/{filename}` | Read one saved workflow |
-| `PUT` | `/workflows/{filename}` | Atomically save one workflow |
-| `POST` | `/workflows/{filename}/run` | Run the saved file with `main.py` |
+| `GET` | `/local-api/health` | Check whether the local process is running |
+| `POST` | `/local-api/tool-contexts` | Validate a tool folder and create a temporary context |
+| `POST` | `/local-api/catalog/refresh` | Run `catalog.py` and return the updated catalog |
+| `GET` | `/local-api/catalog` | Read the current `catalog.json` |
+| `GET` | `/local-api/workflows` | List JSON files under `workflows/` |
+| `GET` | `/local-api/workflows/{filename}` | Read one saved workflow |
+| `PUT` | `/local-api/workflows/{filename}` | Atomically save one workflow |
+| `POST` | `/local-api/workflows/{filename}/run` | Run the saved file with `main.py` |
+| `GET` | `/local-api/packages` | List Marketplace packages installed by the local tool |
+| `GET` | `/local-api/custom-node-packages` | List catalog-confirmed local custom-node sources that may be published |
+| `PUT` | `/local-api/packages/{id}/install` | Validate and install a downloaded Marketplace ZIP |
+| `POST` | `/local-api/packages/{id}/install-from-marketplace` | Stream a fixed Marketplace ZIP directly to a temporary local file and install it |
+| `GET` | `/local-api/packages/{id}/archive` | Rebuild one registry-owned installed package as a ZIP |
+| `PUT` | `/local-api/packages/{id}/publish` | Publish one catalog-confirmed local custom-node source to Marketplace |
 
-Run the bridge tests with:
+The local process does not provide arbitrary command or filesystem access.
+Workflow filenames must be plain `.json` basenames, request bodies are
+size-limited, and catalog generation and workflow execution have timeouts.
+
+### Marketplace package installation
+
+Local mode normally uses `install-from-marketplace`, so large ZIP files travel
+from the fixed configured platform directly into a temporary file owned by
+the Python process. They do not become a browser `Blob`. The request contains
+only package metadata:
+
+```http
+POST /local-api/packages/{id}/install-from-marketplace
+Content-Type: application/json
+
+{"id":"...","name":"...","version":"1.0.0","kind":"node-pack",
+ "sha256":"...","nodeTypes":["package.Node"]}
+```
+
+The local tool constructs the one allowed central download path itself. It
+does **not** accept a download URL, filesystem path, Git URL, or command.
+Redirected Git Marketplace items are rejected; automatic Git cloning is
+intentionally unsupported.
+
+The raw ZIP endpoint remains available for API-only and test integrations:
+
+The install request contract is:
+
+```http
+PUT /local-api/packages/{id}/install
+Content-Type: application/zip
+X-InfraX-Package-Metadata: encodeURIComponent(JSON)
+```
+
+Metadata JSON contains `id`, `name`, semantic `version`, `kind`, `sha256`, and
+`nodeTypes`. `kind` is either `node-pack` or `model-pack`. Node packages are
+installed into `custom_nodes/{id}` and model packages into `models/{id}`.
+
+Before changing an installed package, the tool verifies the SHA-256 and checks
+for path traversal, symbolic links and special files, encryption, unsupported
+compression, duplicate paths, excessive entry count, expanded size,
+compression ratio, and available disk space. It extracts into a staging
+folder, atomically swaps the package, runs `catalog.py`, and rolls back if any
+step fails. A successful package contains `infrax-package.json`; the root
+`package-registry.json` records installed packages. Catalog nodes declared in
+`nodeTypes` receive a `package_ref` containing the package ID, version, and
+digest.
+
+For a model package, catalog responses also contain a relative-path model
+list:
+
+```json
+{
+  "models": [
+    {
+      "id": "detector-model:weights/model.bin",
+      "name": "model.bin",
+      "relative_path": "detector-model/weights/model.bin",
+      "path": "models/detector-model/weights/model.bin",
+      "size": 1234,
+      "package_ref": {
+        "package_id": "detector-model",
+        "version": "1.0.0",
+        "digest": "..."
+      }
+    }
+  ]
+}
+```
+
+`GET /local-api/packages/{id}/archive` accepts only an ID present in
+`package-registry.json`, rejects links and special files, and returns a ZIP
+with `X-InfraX-Archive-Sha256` and URL-encoded
+`X-InfraX-Package-Metadata` headers. The exporter ignores the installed
+`infrax-package.json` copy and regenerates one from the registry record, so an
+exported archive can be installed into a fresh Pipeline Tool safely without
+trusting a modified local manifest.
+
+`GET /local-api/custom-node-packages` is the source for the local publish
+picker. It returns only top-level `custom_nodes/{id}` folders that are present
+in the current catalog and are not Marketplace-installed registry packages:
+
+```json
+{
+  "ok": true,
+  "packages": [
+    {
+      "id": "my-nodes",
+      "name": "my-nodes",
+      "kind": "node-pack",
+      "source": "custom_nodes",
+      "installPath": "custom_nodes/my-nodes",
+      "nodeTypes": ["my_nodes.Example"],
+      "fileCount": 6,
+      "size": 18432
+    }
+  ]
+}
+```
+
+`PUT /local-api/packages/{id}/publish` accepts JSON containing `name`,
+`version`, `description`, `kind`, `nodeTypes`, and optional `author`.
+`nodeTypes` must be a subset of the types that catalog discovery associated
+with that local folder. The bridge builds that folder only, streams the ZIP
+to the fixed central `/marketplace/modules/{id}` path with its memory-only
+token, and forwards optional `If-Match`. No ZIP is materialized in browser
+memory.
+
+Automatic local-source publishing uses a deliberately narrow file allowlist:
+Python source (`.py`, `.pyi`), documentation named `README*` or `LICENSE*`
+with a text/document extension, `requirements*.txt`, and the exact
+`pyproject.toml` file. Hidden files and folders, caches, JSON/YAML/config
+files, credentials, arbitrary text files, model weights, and other binaries
+are omitted. Review `fileCount` and `size` in the picker before uploading.
+Marketplace-installed packages cannot be republished or resold through this
+endpoint; that request returns
+`409 installed_package_republish_not_allowed`.
+
+The digest proves that the bytes match the Marketplace metadata; it does not
+sandbox or make third-party Python code trustworthy. `catalog.py` imports node
+packages during discovery, and `main.py` executes their nodes. Install only
+packages from a publisher you trust.
+
+The unprefixed `/packages` and `/packages/{id}/install` aliases expose the
+same operations for the legacy bearer-token API. Browser local mode should
+normally use `/local-api/...`, which is protected by the temporary HttpOnly
+session cookie.
+
+Run its tests with:
 
 ```powershell
 python -m unittest -v test_studio_bridge

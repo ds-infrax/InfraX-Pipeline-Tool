@@ -1,0 +1,757 @@
+<!doctype html>
+<html lang="ko" data-api-base="" data-platform-api-base="" data-local-tool-base="http://127.0.0.1:8765/" data-local-tool-token="" data-local-studio="false" data-pipeline-tool-version="">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#f5f6f7" />
+  <title>infraX Workflow Studio</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div class="app" id="editorView">
+    <header class="topbar">
+      <div class="topbar-brand">
+        <span class="brand-mark" aria-hidden="true">iX</span>
+        <div>
+          <strong>Workflow Studio</strong>
+          <span>Runner-ready graph editor</span>
+        </div>
+      </div>
+
+      <div class="workflow-context" aria-live="polite">
+        <span class="eyebrow">CURRENT WORKFLOW</span>
+        <div class="workflow-context-row">
+          <h1 id="currentWorkflowName">example_simple</h1>
+          <span class="save-state" id="saveState" title="편집 중에는 브라우저에 자동 저장되고, 저장 버튼을 누르면 workflows 폴더에 기록됩니다.">
+            <span class="save-state-dot"></span>
+            <span id="saveStateText">브라우저 초안 준비 중</span>
+          </span>
+        </div>
+      </div>
+
+      <div class="topbar-actions">
+        <button class="icon-button" id="historyBtn" type="button" title="변경 기록" aria-label="변경 기록 열기">
+          <span class="material-symbols-outlined">history</span>
+        </button>
+        <button class="btn ghost" id="saveWorkflowBtn" type="button" title="현재 워크플로우를 workflows 폴더에 저장">
+          <span class="material-symbols-outlined">save</span>
+          파일 저장
+        </button>
+        <button class="btn ghost" id="runWorkflowBtn" type="button" title="저장한 워크플로우를 main.py로 실행">
+          <span class="material-symbols-outlined">play_arrow</span>
+          실행
+        </button>
+        <button class="btn ghost" id="downloadBtn" type="button">
+          <span class="material-symbols-outlined">download</span>
+          JSON 내보내기
+        </button>
+        <button class="btn primary" id="registerWorkflowBtn" type="button" title="3단계 · 테스트 완료 스냅샷을 다른 사람과 공유">
+          <span class="material-symbols-outlined">publish</span>
+          Marketplace 업로드
+        </button>
+      </div>
+    </header>
+
+    <div class="studio-layout">
+      <nav class="app-rail" aria-label="주요 메뉴">
+        <div class="rail-menu">
+          <button class="rail-button icon-tab active" type="button" data-target="workflowSection" title="워크플로우">
+            <span class="material-symbols-outlined">account_tree</span>
+            <span>흐름</span>
+          </button>
+          <button class="rail-button icon-tab" type="button" data-target="paletteSection" title="노드 라이브러리">
+            <span class="material-symbols-outlined">deployed_code</span>
+            <span>노드</span>
+          </button>
+          <button class="rail-button" id="marketplaceBtn" type="button" title="마켓플레이스">
+            <span class="material-symbols-outlined">storefront</span>
+            <span>마켓</span>
+          </button>
+        </div>
+        <div class="rail-footer">
+          <button class="rail-button" id="developerToolsBtn" type="button" title="개발자 도구">
+            <span class="material-symbols-outlined">terminal</span>
+            <span>개발</span>
+          </button>
+          <div class="local-profile" id="localProfile" title="로그인 상태를 확인 중입니다.">
+            <span id="localProfileInitial">L</span>
+          </div>
+        </div>
+      </nav>
+
+      <aside class="sidebar" aria-label="워크플로우 탐색기">
+        <div
+          class="project-context local-tool-context"
+          id="localToolContextPanel"
+          data-local-studio-setup
+        >
+          <span class="eyebrow">LOCAL TOOL</span>
+          <div class="local-tool-summary" id="localToolSummary">
+            <span class="status-dot muted" id="localToolStatusDot"></span>
+            <div>
+              <b id="localToolStatusLabel">로컬 툴 연결 확인 중</b>
+              <small id="localToolBaseLabel">127.0.0.1:8765 · workflows</small>
+            </div>
+            <input class="local-tool-token-input" id="localToolTokenInput" type="password" aria-label="로컬 툴 연결 토큰" placeholder="연결 토큰" autocomplete="off" />
+            <button class="text-action" id="pairLocalToolBtn" type="button">연결</button>
+          </div>
+          <div class="local-tool-root-setting">
+            <label for="localToolRootInput">실행 도구 폴더</label>
+            <div class="local-tool-root-row">
+              <input id="localToolRootInput" type="text" aria-label="로컬 실행 도구 폴더 경로" placeholder="D:\...\InfraX-Pipeline-Tool" autocomplete="off" spellcheck="false" />
+              <button class="text-action" id="saveLocalToolRootBtn" type="button">저장</button>
+            </div>
+            <small id="localToolRootStatus">사이트를 열 때 저장된 경로를 다시 연결합니다.</small>
+          </div>
+          <div class="hidden" aria-hidden="true">
+            <label for="projectSelect">호환 프로젝트</label>
+            <select id="projectSelect" aria-label="프로젝트 선택"></select>
+            <button id="newProjectBtn" type="button">새 프로젝트</button>
+            <button id="cloneProjectBtn" type="button">현재 프로젝트 복제</button>
+          </div>
+        </div>
+
+        <div class="side-content">
+          <section class="section" id="workflowSection">
+            <div class="section-heading">
+              <div>
+                <span class="eyebrow">WORKFLOWS</span>
+                <h2>워크플로우</h2>
+              </div>
+              <button class="icon-button compact accent" id="newWorkflowBtn" type="button" title="새 워크플로우" aria-label="새 워크플로우">
+                <span class="material-symbols-outlined">add</span>
+              </button>
+            </div>
+            <ol class="persistence-guide" aria-label="워크플로우 저장 3단계">
+              <li class="active"><b>1</b><span>브라우저 자동</span></li>
+              <li><b>2</b><span>폴더 저장</span></li>
+              <li><b>3</b><span>마켓 공유</span></li>
+            </ol>
+            <div class="section-inline-actions">
+              <button class="text-action" id="cloneWorkflowBtn" type="button">
+                <span class="material-symbols-outlined">content_copy</span> 복제
+              </button>
+              <button class="text-action" id="toggleWorkflowListBtn" type="button">현재만</button>
+            </div>
+            <div class="nav-list" id="workflowList"></div>
+
+            <div class="subsection-heading server-heading">
+              <div>
+                <span class="eyebrow">WORKFLOWS FOLDER</span>
+                <h3>로컬 파일</h3>
+              </div>
+              <button class="icon-button compact" id="refreshServerWorkflowsBtn" type="button" title="workflows 폴더 새로고침" aria-label="workflows 폴더 새로고침">
+                <span class="material-symbols-outlined">refresh</span>
+              </button>
+            </div>
+            <p class="section-description server-description"><code>workflows</code> 폴더의 JSON 파일입니다. 파일을 열면 현재 브라우저 초안이 해당 파일로 교체됩니다.</p>
+            <div class="nav-list server-workflow-list" id="serverWorkflowList" aria-live="polite">
+              <div class="kv"><span>로컬 워크플로우 파일을 조회하는 중입니다.</span></div>
+            </div>
+
+            <div class="subsection-heading">
+              <div>
+                <span class="eyebrow">ON CANVAS</span>
+                <h3>객체</h3>
+              </div>
+              <span class="microcopy">이름 우선 · 타입 보조</span>
+            </div>
+            <div class="object-list" id="objectList"></div>
+          </section>
+
+          <section class="section sidebar-hidden" id="paletteSection">
+            <div class="section-heading">
+              <div>
+                <span class="eyebrow">NODE LIBRARY</span>
+                <h2>노드 라이브러리</h2>
+              </div>
+              <button class="icon-button compact" id="refreshExplorerBtn" type="button" title="노드 목록 다시 조회" aria-label="노드 목록 다시 조회">
+                <span class="material-symbols-outlined">refresh</span>
+              </button>
+            </div>
+            <div class="explorer-status is-mock" id="explorerStatus" data-local-studio-setup>
+              <div class="explorer-status-head">
+                <span class="status-dot muted" id="explorerStatusDot"></span>
+                <div>
+                  <b id="explorerStatusLabel">로컬 툴 연결 확인 중</b>
+                  <small id="explorerLastScanned">catalog.py 실행 대기</small>
+                </div>
+              </div>
+            </div>
+            <p class="section-description" id="catalogConnectionDescription" data-local-studio-setup>최초 접속과 ‘다시 조회’ 때 로컬 툴의 <code>catalog.py</code>를 실행하고, 생성된 <code>catalog.json</code>의 확인된 노드만 표시합니다.</p>
+            <div class="library-search">
+              <span class="material-symbols-outlined">search</span>
+              <input id="nodeSearchInput" type="search" placeholder="이름 또는 타입 검색" autocomplete="off" />
+            </div>
+            <div class="nav-list node-library-list" id="nodePalette"></div>
+          </section>
+        </div>
+      </aside>
+
+      <main class="canvas-shell" id="canvasShell" aria-label="워크플로우 캔버스">
+        <div class="canvas-meta">
+          <span class="canvas-chip" id="nodeCount">0 nodes</span>
+          <span class="canvas-chip" id="linkCount">0 links</span>
+          <span class="canvas-chip selected-chip" id="selectedInfo">선택 없음</span>
+        </div>
+
+        <div class="canvas-tools glass-panel" aria-label="캔버스 도구">
+          <button class="tool-button" id="undoBtn" type="button" title="실행 취소" aria-label="실행 취소">
+            <span class="material-symbols-outlined">undo</span>
+          </button>
+          <button class="tool-button" id="redoBtn" type="button" title="다시 실행" aria-label="다시 실행">
+            <span class="material-symbols-outlined">redo</span>
+          </button>
+          <span class="tool-divider"></span>
+          <button class="tool-button wide" id="fitBtn" type="button" title="화면에 맞춤">
+            <span class="material-symbols-outlined">fit_screen</span>
+            맞춤
+          </button>
+          <span class="tool-divider"></span>
+          <label class="sr-only" for="addNodeTypeSelect">추가할 노드</label>
+          <select class="node-type-select" id="addNodeTypeSelect"></select>
+          <button class="tool-button add" id="addNodeBtn" type="button">
+            <span class="material-symbols-outlined">add</span>
+            추가
+          </button>
+        </div>
+
+        <div class="zoom-panel glass-panel" aria-label="확대·축소 도구">
+          <button class="tool-button" id="zoomOutBtn" type="button" aria-label="축소">
+            <span class="material-symbols-outlined">remove</span>
+          </button>
+          <button class="zoom-value" id="zoomResetBtn" type="button">100%</button>
+          <button class="tool-button" id="zoomInBtn" type="button" aria-label="확대">
+            <span class="material-symbols-outlined">add</span>
+          </button>
+        </div>
+
+        <div class="canvas-hint">
+          <span class="material-symbols-outlined">open_with</span>
+          Alt + 드래그 또는 휠 클릭으로 이동 · Ctrl + 휠로 확대
+        </div>
+
+        <section class="run-output-panel hidden" id="runOutputPanel" aria-live="polite">
+          <header>
+            <div>
+              <span class="eyebrow">LOCAL RUNNER</span>
+              <b id="runOutputTitle">실행 결과</b>
+            </div>
+            <button class="icon-button compact" id="closeRunOutputBtn" type="button" aria-label="실행 결과 닫기">
+              <span class="material-symbols-outlined">close</span>
+            </button>
+          </header>
+          <pre id="runOutputText"></pre>
+        </section>
+
+        <div class="world" id="world">
+          <svg class="links" id="linksSvg"></svg>
+          <div id="nodeLayer"></div>
+          <div class="link-control-layer" id="linkControlLayer"></div>
+        </div>
+      </main>
+
+      <aside class="inspector" aria-label="선택 객체 설정">
+        <div class="inspector-header">
+          <span class="eyebrow">INSPECTOR</span>
+          <div class="inspector-title">
+            <b id="inspectorTitle">객체를 선택하세요</b>
+            <span id="inspectorSubtitle">캔버스의 노드 또는 연결선을 선택하면 설정이 표시됩니다.</span>
+          </div>
+        </div>
+        <section class="node-details" id="nodeDetails">
+          <div class="inspector-empty">
+            <span class="material-symbols-outlined">touch_app</span>
+            <b>편집할 객체를 선택하세요</b>
+            <p>이 영역에는 선택한 객체의 값과 연결 정보만 표시됩니다.</p>
+          </div>
+        </section>
+      </aside>
+    </div>
+
+    <!-- 기존 함수 계약을 보존하되 사용자 주 화면에서는 감춘 체크·호환 영역 -->
+    <div class="compatibility-shell hidden" aria-hidden="true">
+      <button id="runBtn" type="button">Mock 실행</button>
+      <button id="validateBtn" type="button">검증</button>
+      <button id="importBtn" type="button">JSON 가져오기</button>
+      <button id="jsonBtn" type="button">JSON 보기</button>
+      <input id="fileInput" type="file" accept="application/json,.json" />
+      <input id="projectNameInput" type="text" />
+      <div id="projectList"></div>
+      <div id="projectWorkflowList"></div>
+      <textarea id="jsonInput" readonly tabindex="-1"></textarea>
+      <div id="jsonHint"></div>
+      <div id="validationList"></div>
+      <div class="log"></div>
+    </div>
+  </div>
+
+  <aside class="history-drawer hidden" id="historyPane" aria-label="변경 기록" aria-hidden="true">
+    <div class="drawer-head">
+      <div>
+        <span class="eyebrow">LOCAL HISTORY</span>
+        <h2>변경 기록</h2>
+        <span class="history-summary" id="historySummary">저장된 변경 기록</span>
+      </div>
+      <button class="icon-button" id="closeHistoryBtn" type="button" aria-label="변경 기록 닫기">
+        <span class="material-symbols-outlined">close</span>
+      </button>
+    </div>
+    <div class="drawer-note">
+      <span class="material-symbols-outlined">info</span>
+      현재 편집 세션의 실행 취소 기록입니다. 마켓플레이스 버전과는 별개입니다.
+    </div>
+    <div class="history-list" id="historyList"></div>
+    <div class="drawer-foot">
+      <button class="btn ghost" type="button" onclick="clearWorkflowHistory()">
+        <span class="material-symbols-outlined">delete_sweep</span>
+        기록 비우기
+      </button>
+    </div>
+  </aside>
+  <div class="drawer-scrim hidden" id="drawerScrim"></div>
+
+  <section class="developer-panel hidden" id="developerPanel" aria-labelledby="developerPanelTitle">
+    <header class="developer-panel-head">
+      <div>
+        <span class="eyebrow">ADVANCED</span>
+        <h2 id="developerPanelTitle">개발자 도구</h2>
+        <p>Script, Catalog, Node Type, Port Type 관리는 워크플로우 편집과 분리했습니다.</p>
+      </div>
+      <button class="icon-button" id="closeDeveloperToolsBtn" type="button" aria-label="개발자 도구 닫기">
+        <span class="material-symbols-outlined">close</span>
+      </button>
+    </header>
+    <section class="developer-panel-body section" id="scriptSection">
+      <div class="developer-action-grid">
+        <button class="developer-action-card" id="registerScriptBtn" type="button">
+          <span class="material-symbols-outlined">code_blocks</span>
+          <b>Script 등록</b>
+          <small>노드 구현과 입출력 포트를 정의합니다.</small>
+        </button>
+        <button class="developer-action-card" id="catalogImportBtn" type="button">
+          <span class="material-symbols-outlined">upload_file</span>
+          <b>Catalog 파일 가져오기</b>
+          <small>자동 조회가 불가능할 때만 catalog.json을 수동으로 확인합니다.</small>
+        </button>
+        <button class="developer-action-card" id="manageNodeTypesBtn" type="button">
+          <span class="material-symbols-outlined">category</span>
+          <b>Node Type 관리</b>
+          <small>노드의 내부 분류 식별자를 관리합니다.</small>
+        </button>
+        <button class="developer-action-card" id="manageTypesBtn" type="button">
+          <span class="material-symbols-outlined">data_object</span>
+          <b>Port Type 관리</b>
+          <small>포트 데이터 타입과 정규식을 관리합니다.</small>
+        </button>
+        <button class="developer-action-card hidden" id="recoverLegacyDraftBtn" type="button">
+          <span class="material-symbols-outlined">restore_page</span>
+          <b>이전 로컬 초안 복구</b>
+          <small>계정별 저장 도입 전에 이 브라우저에 남긴 초안을 현재 로컬 영역으로 가져옵니다.</small>
+        </button>
+      </div>
+      <input class="hidden" id="catalogInput" type="file" accept="application/json,.json" />
+      <div class="developer-library">
+        <div class="section-heading">
+          <div>
+            <span class="eyebrow">SCRIPT REGISTRY</span>
+            <h3>현재 Script Library</h3>
+          </div>
+        </div>
+        <div class="script-list" id="scriptLibrary"></div>
+      </div>
+    </section>
+  </section>
+
+  <section class="marketplace-view hidden" id="marketplaceView" aria-labelledby="marketplaceViewTitle">
+    <header class="marketplace-view-head">
+      <div class="marketplace-brand">
+        <span class="brand-mark inverse" aria-hidden="true">iX</span>
+        <div>
+          <span class="eyebrow">WORKFLOW MARKETPLACE</span>
+          <h1 id="marketplaceViewTitle">검증한 흐름을 팀의 자산으로</h1>
+        </div>
+      </div>
+      <div class="marketplace-head-actions">
+        <div class="marketplace-author-chip" id="marketplaceAuthorChip" title="로그인 상태를 확인 중입니다.">
+          <span class="material-symbols-outlined">person</span>
+          <div>
+            <small id="marketplaceAuthorStatus">로그인 확인 중</small>
+            <b id="marketplaceAuthorDisplay">작성자 미설정</b>
+          </div>
+        </div>
+        <button class="btn inverse" type="button" id="closeMarketplaceBtn">
+          <span class="material-symbols-outlined">arrow_back</span>
+          편집기로 돌아가기
+        </button>
+      </div>
+    </header>
+
+    <main class="marketplace-view-body">
+      <section class="marketplace-intro">
+        <div>
+          <span class="eyebrow">SHARED ASSET REGISTRY</span>
+          <h2>워크플로우와 실행 모듈을<br />한곳에서 관리하세요.</h2>
+        </div>
+        <p>편집본과 실행 파일은 내 PC에만 저장됩니다. Marketplace 항목만 중앙 서버에서 공유하며, 작성자 또는 관리자만 수정·삭제할 수 있습니다.</p>
+      </section>
+
+      <section class="pipeline-tool-release" id="pipelineToolReleasePanel" aria-live="polite">
+        <div class="pipeline-tool-release-icon" aria-hidden="true">
+          <span class="material-symbols-outlined">desktop_windows</span>
+        </div>
+        <div class="pipeline-tool-release-copy">
+          <span class="eyebrow">LOCAL PIPELINE TOOL</span>
+          <h3 id="pipelineToolReleaseTitle">Pipeline Tool 최신 버전 확인 중</h3>
+          <p id="pipelineToolReleaseDescription">서버가 연결되지 않아도 로컬 노드 탐색, 워크플로우 저장과 실행은 계속 사용할 수 있습니다.</p>
+          <div class="pipeline-tool-release-meta" id="pipelineToolReleaseMeta"></div>
+        </div>
+        <div class="pipeline-tool-release-actions">
+          <button class="btn primary" id="downloadPipelineToolBtn" type="button" disabled>
+            <span class="material-symbols-outlined">download</span>
+            <span id="downloadPipelineToolLabel">버전 확인 중</span>
+          </button>
+          <button class="btn light hidden" id="connectPlatformAccountBtn" type="button">
+            <span class="material-symbols-outlined">link</span>
+            서버 계정 연결
+          </button>
+        </div>
+      </section>
+
+      <div class="marketplace-tabs" role="tablist" aria-label="마켓플레이스 분류">
+        <button class="marketplace-tab active" type="button" data-marketplace-tab="workspace" role="tab" aria-selected="true">
+          <span class="material-symbols-outlined">account_tree</span>
+          <span>
+            <b>Workspace</b>
+            <small>테스트 완료 워크플로우</small>
+          </span>
+        </button>
+        <button class="marketplace-tab" type="button" data-marketplace-tab="module" role="tab" aria-selected="false">
+          <span class="material-symbols-outlined">deployed_code</span>
+          <span>
+            <b>Model / Module</b>
+            <small>Git 또는 ZIP 소스</small>
+          </span>
+        </button>
+      </div>
+
+      <div class="marketplace-content-head">
+        <div>
+          <h3 id="marketplaceSectionTitle">등록된 워크플로우</h3>
+          <p id="marketplaceSummary"></p>
+        </div>
+        <button class="btn primary hidden" type="button" id="openModuleRegisterBtn">
+          <span class="material-symbols-outlined">add</span>
+          모델 / 모듈 등록
+        </button>
+      </div>
+
+      <details class="marketplace-register hidden" id="marketplaceRegisterPanel">
+        <summary>모델 / 모듈 등록 폼 열기</summary>
+        <form id="marketplaceRegisterForm" class="marketplace-register-form" novalidate>
+          <div class="marketplace-register-head">
+            <div>
+              <span class="eyebrow">NEW PACKAGE</span>
+              <h3 id="marketplaceRegisterTitle">모델 / 모듈 등록</h3>
+              <p>Git 주소 또는 ZIP 파일 본문과 설명을 Marketplace 서버에 등록합니다.</p>
+            </div>
+          </div>
+          <div class="form-grid">
+            <div class="field">
+              <label for="marketplacePackageName">패키지 이름</label>
+              <input id="marketplacePackageName" name="name" required maxlength="80" autocomplete="off" placeholder="예: Object Detector" />
+            </div>
+            <div class="field">
+              <label for="marketplacePackageVersion">버전</label>
+              <input id="marketplacePackageVersion" name="version" required maxlength="30" autocomplete="off" value="1.0.0" placeholder="예: 1.0.0" pattern="(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?" title="Semantic Version 형식으로 입력하세요. 예: 1.0.0 또는 1.0.0-beta.1" />
+            </div>
+            <div class="field">
+              <label for="marketplacePackageKind">패키지 종류</label>
+              <select id="marketplacePackageKind" name="kind" required>
+                <option value="model-pack">모델</option>
+                <option value="node-pack" selected>노드 / 모듈</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="marketplacePackageAuthor">작성자</label>
+              <input id="marketplacePackageAuthor" name="author" required maxlength="60" autocomplete="name" placeholder="작성자 이름 (미인증)" />
+            </div>
+            <div class="field full">
+              <label for="marketplacePackageDescription">설명</label>
+              <textarea id="marketplacePackageDescription" name="description" required maxlength="500" rows="3" placeholder="이 모델의 역할과 사용 조건을 적어주세요."></textarea>
+            </div>
+            <div class="field full">
+              <div class="marketplace-node-selection hidden" id="marketplaceNodeSelection">
+                <label>이 PC에서 탐색된 노드 선택</label>
+                <div class="marketplace-node-options" id="marketplaceNodeOptions"></div>
+                <small>선택한 노드 타입을 등록 정보에 자동 입력합니다. 실제 소스는 같은 패키지의 Git 주소 또는 ZIP으로 등록하세요.</small>
+              </div>
+            </div>
+            <div class="field full">
+              <label for="marketplacePackageNodeTypes">제공 노드 타입</label>
+              <input id="marketplacePackageNodeTypes" name="nodeTypes" maxlength="1000" autocomplete="off" placeholder="예: sample.Scale, vision.Detector" />
+              <small>쉼표로 구분합니다. 누락 노드가 이 목록과 일치하면 다운로드 항목을 바로 안내합니다.</small>
+            </div>
+          </div>
+          <fieldset class="marketplace-source-choice">
+            <legend>소스 선택</legend>
+            <label data-local-studio-only hidden><input type="radio" name="sourceType" value="local-package" /> 이 PC 노드 패키지</label>
+            <label><input type="radio" name="sourceType" value="git" checked /> Git 소스 경로</label>
+            <label><input type="radio" name="sourceType" value="zip" /> ZIP 파일</label>
+          </fieldset>
+          <div class="field hidden" id="marketplaceLocalPackageField" data-local-studio-only>
+            <label for="marketplaceLocalPackageSelect">이 PC의 catalog 확인 노드 패키지</label>
+            <select id="marketplaceLocalPackageSelect" name="localPackageId">
+              <option value="">로컬 패키지 목록을 불러오는 중...</option>
+            </select>
+            <small>Python 소스 전용 간편 게시입니다(.py/.pyi, README/LICENSE, requirements, pyproject만 포함). JSON/YAML/바이너리/리소스가 필요한 복합 노드와 모델은 검토한 Git 주소 또는 직접 만든 ZIP으로 등록하세요. 설치한 Marketplace 패키지와 로컬 경로는 전송하지 않습니다.</small>
+          </div>
+          <div class="field" id="marketplaceGitField">
+            <label for="marketplaceGitSourcePath">Git 소스 경로</label>
+            <input id="marketplaceGitSourcePath" name="gitSourcePath" type="text" placeholder="https://host/owner/repo.git 또는 git@host:owner/repo.git" />
+          </div>
+          <div class="field hidden" id="marketplaceZipField">
+            <label for="marketplaceZipFile">ZIP 파일</label>
+            <input id="marketplaceZipFile" name="zipFile" type="file" accept=".zip,application/zip,application/x-zip-compressed" />
+            <small id="marketplaceZipHelp">ZIP 본문을 Marketplace 서버에 업로드합니다. 최대 100 MB.</small>
+          </div>
+          <p class="form-error" id="marketplaceRegisterError" role="alert" aria-live="polite"></p>
+          <div class="modal-foot">
+            <button class="btn ghost" type="button" id="resetMarketplaceRegisterBtn">초기화</button>
+            <button class="btn primary" type="submit">
+              <span class="material-symbols-outlined">publish</span>
+              <span id="marketplaceRegisterSubmitLabel">Marketplace 서버에 등록</span>
+            </button>
+          </div>
+        </form>
+      </details>
+
+      <div class="marketplace-list marketplace-grid" id="marketplaceList"></div>
+    </main>
+  </section>
+
+  <div class="modal-backdrop hidden" id="workflowRegisterModal" role="dialog" aria-modal="true" aria-labelledby="workflowRegisterTitle">
+    <form class="modal workflow-register-modal" id="workflowRegisterForm" novalidate>
+      <div class="modal-head">
+        <div class="modal-title">
+          <span class="eyebrow">PUBLISH WORKFLOW</span>
+          <b id="workflowRegisterTitle">Workflow Marketplace 업로드</b>
+          <span>테스트가 끝난 JSON 스냅샷을 공유 Marketplace 서버에 업로드합니다.</span>
+        </div>
+        <button class="icon-button" type="button" id="closeWorkflowRegisterBtn" aria-label="등록 창 닫기">
+          <span class="material-symbols-outlined">close</span>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div class="register-snapshot">
+          <span class="material-symbols-outlined">account_tree</span>
+          <div>
+            <span class="eyebrow">SNAPSHOT</span>
+            <b id="workflowRegisterSnapshotName">example_simple</b>
+            <small id="workflowRegisterSnapshotMeta">0 nodes · 0 links</small>
+          </div>
+        </div>
+        <div class="form-grid">
+          <div class="field">
+            <label for="workflowPackageName">표시 이름</label>
+            <input id="workflowPackageName" name="name" required maxlength="80" />
+          </div>
+          <div class="field">
+            <label for="workflowPackageVersion">버전</label>
+            <input id="workflowPackageVersion" name="version" required maxlength="30" value="1.0.0" />
+          </div>
+          <div class="field full">
+            <label for="workflowPackageDescription">설명</label>
+            <textarea id="workflowPackageDescription" name="description" required maxlength="500" rows="4" placeholder="목적, 입력 데이터, 기대 결과를 적어주세요."></textarea>
+          </div>
+          <div class="field full">
+            <label for="workflowPackageAuthor">작성자</label>
+            <input id="workflowPackageAuthor" name="author" required maxlength="60" autocomplete="name" placeholder="작성자 이름 (미인증)" />
+            <small>제품에서는 로그인이 필요합니다. 현재 값은 로그인 연동 전 미인증 로컬 프로필입니다.</small>
+          </div>
+        </div>
+        <label class="confirmation-card">
+          <input id="workflowTestedInput" name="tested" type="checkbox" required />
+          <span class="material-symbols-outlined">verified</span>
+          <span>
+            <b>별도 실행기에서 테스트를 완료했습니다.</b>
+            <small>등록 후에는 이 시점의 JSON 스냅샷이 마켓 버전으로 관리됩니다.</small>
+          </span>
+        </label>
+        <p class="form-error" id="workflowRegisterError" role="alert" aria-live="polite"></p>
+      </div>
+      <div class="modal-foot">
+        <button class="btn ghost" type="button" id="cancelWorkflowRegisterBtn">취소</button>
+        <button class="btn primary" type="submit">
+          <span class="material-symbols-outlined">publish</span>
+          Marketplace 업로드
+        </button>
+      </div>
+    </form>
+  </div>
+
+  <div class="modal-backdrop hidden" id="scriptModal" role="dialog" aria-modal="true" aria-labelledby="scriptModalTitle">
+    <form class="modal" id="scriptForm" onsubmit="event.preventDefault(); addScriptFromModal();">
+      <div class="modal-head">
+        <div class="modal-title">
+          <span class="eyebrow">DEVELOPER TOOL</span>
+          <b id="scriptModalTitle">Script 등록</b>
+          <span>노드 구현, 버전, 실행 명령, 입출력 포트를 정의합니다.</span>
+        </div>
+        <button class="icon-button" type="button" id="closeScriptModalBtn" onclick="closeScriptModal()" aria-label="닫기">
+          <span class="material-symbols-outlined">close</span>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div class="form-grid">
+          <div class="field">
+            <label for="scriptTypeInput">Node Type</label>
+            <select id="scriptTypeInput" name="type" required></select>
+          </div>
+          <div class="field">
+            <label for="scriptNameInput">Script Name</label>
+            <input id="scriptNameInput" name="name" value="Add Script" required />
+          </div>
+          <div class="field">
+            <label for="scriptDeveloperInput">Developer</label>
+            <input id="scriptDeveloperInput" name="developer" value="user" />
+          </div>
+          <div class="field">
+            <label for="scriptVersionInput">Version</label>
+            <input id="scriptVersionInput" name="version" value="1.0" />
+          </div>
+          <div class="field">
+            <label for="scriptStatusInput">Status</label>
+            <select id="scriptStatusInput" name="status">
+              <option value="stable">stable</option>
+              <option value="experimental" selected>experimental</option>
+              <option value="warning">warning</option>
+              <option value="deprecated">deprecated</option>
+            </select>
+          </div>
+          <div class="field full">
+            <label for="scriptCommandInput">실행 명령</label>
+            <input id="scriptCommandInput" name="command" value="python scripts/math/add.py" />
+          </div>
+          <div class="field full">
+            <label>Inputs</label>
+            <div class="port-builder">
+              <div class="port-builder-row">
+                <input id="scriptInputNameInput" placeholder="변수명 예: a" />
+                <select id="scriptInputTypeInput"></select>
+                <button class="btn ghost" type="button" onclick="addPortFromModal('input')">추가</button>
+              </div>
+              <div class="port-chip-list" id="scriptInputChipList"></div>
+            </div>
+          </div>
+          <div class="field full">
+            <label>Outputs</label>
+            <div class="port-builder">
+              <div class="port-builder-row">
+                <input id="scriptOutputNameInput" placeholder="변수명 예: result" />
+                <select id="scriptOutputTypeInput"></select>
+                <button class="btn ghost" type="button" onclick="addPortFromModal('output')">추가</button>
+              </div>
+              <div class="port-chip-list" id="scriptOutputChipList"></div>
+            </div>
+          </div>
+          <label class="check-row field full">
+            <input id="createNodeAfterRegisterInput" type="checkbox" />
+            등록 후 이 Script 타입의 노드를 캔버스에 바로 추가
+          </label>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn ghost" type="button" id="resetScriptModalBtn" onclick="resetScriptModal()">초기화</button>
+        <button class="btn ghost" type="button" id="cancelScriptModalBtn" onclick="cancelScriptModal()">취소</button>
+        <button class="btn primary" type="button" id="submitScriptModalBtn" onclick="addScriptFromModal()">등록</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="modal-backdrop hidden" id="nodeTypeModal" role="dialog" aria-modal="true" aria-labelledby="nodeTypeModalTitle">
+    <form class="modal type-modal" id="nodeTypeForm" onsubmit="event.preventDefault(); addNodeTypeFromModal();">
+      <div class="modal-head">
+        <div class="modal-title">
+          <span class="eyebrow">DEVELOPER TOOL</span>
+          <b id="nodeTypeModalTitle">Node Type 관리</b>
+          <span>Script가 연결될 내부 노드 식별자를 관리합니다.</span>
+        </div>
+        <button class="icon-button" type="button" onclick="closeNodeTypeModal()" aria-label="닫기">
+          <span class="material-symbols-outlined">close</span>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div class="port-builder">
+          <div class="port-builder-row">
+            <input id="newNodeTypeInput" placeholder="Node Type 예: CsvReader" />
+            <span></span>
+            <button class="btn ghost" type="submit">추가</button>
+          </div>
+          <div class="port-chip-list" id="nodeTypeChipList"></div>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn primary" type="button" onclick="closeNodeTypeModal()">완료</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="modal-backdrop hidden" id="typeModal" role="dialog" aria-modal="true" aria-labelledby="typeModalTitle">
+    <form class="modal type-modal" id="typeForm" onsubmit="event.preventDefault(); addTypeFromModal();">
+      <div class="modal-head">
+        <div class="modal-title">
+          <span class="eyebrow">DEVELOPER TOOL</span>
+          <div class="modal-title-row">
+            <b id="typeModalTitle">Port Type 관리</b>
+            <button class="help-dot" type="button" aria-label="정규식 도움말" onclick="toggleRegexHelp(event)">?</button>
+          </div>
+          <span>포트 타입명과 값 확인용 정규식을 관리합니다.</span>
+        </div>
+        <button class="icon-button" type="button" onclick="closeTypeModal()" aria-label="닫기">
+          <span class="material-symbols-outlined">close</span>
+        </button>
+      </div>
+      <div class="regex-tooltip" id="regexHelpTooltip" role="tooltip">
+        <b>정규식 사용 안내</b>
+        <p><code>^</code> 시작, <code>$</code> 끝, <code>\d</code> 숫자, <code>+</code> 1회 이상을 뜻합니다.</p>
+        <code>INT = ^-?\d+$</code>
+        <code>CSV = ^.+\.csv$</code>
+      </div>
+      <div class="modal-body">
+        <div class="port-builder">
+          <div class="port-builder-row type-builder-row">
+            <input id="newTypeInput" placeholder="타입명 예: DATAFRAME" />
+            <input id="newTypePatternInput" placeholder="정규식 예: ^.+\\.csv$" />
+            <button class="btn ghost" type="submit">추가</button>
+          </div>
+          <div class="port-chip-list" id="typeChipList"></div>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn ghost hidden" type="button" id="resetTypesBtn" onclick="resetTypes()">기본값 복원</button>
+        <button class="btn primary" type="button" onclick="closeTypeModal()">완료</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="toast hidden" id="toast" role="status" aria-live="polite"></div>
+  <div class="auth-startup-gate hidden" id="authStartupGate" role="alertdialog" aria-modal="true" aria-labelledby="authStartupGateTitle">
+    <div class="auth-startup-card">
+      <span class="material-symbols-outlined">cloud_off</span>
+      <div>
+        <span class="eyebrow">ACCOUNT CHECK</span>
+        <b id="authStartupGateTitle">로그인 계정을 확인할 수 없습니다</b>
+        <p>계정별 로컬 초안이 섞이지 않도록 편집기를 잠시 잠갔습니다. 인증 서버가 복구된 뒤 다시 시도해 주세요.</p>
+      </div>
+      <button class="btn primary" type="button" id="retryAuthStartupBtn">
+        <span class="material-symbols-outlined">refresh</span>
+        다시 확인
+      </button>
+    </div>
+  </div>
+
+  <script src="./ui-components.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>
