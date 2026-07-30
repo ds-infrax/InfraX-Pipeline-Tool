@@ -74,7 +74,12 @@ server.
 
 The installed tool version is stored in the root `VERSION` file. The local
 health API and the served HTML both expose that same semantic version so the
-hosted Pipeline site can tell the user when a newer ZIP is available.
+hosted Pipeline site can tell the user when a newer release is available.
+Official builds are published at:
+
+```text
+https://github.com/ds-infrax/InfraX-Pipeline-Tool/releases/latest
+```
 
 On Windows, double-click:
 
@@ -160,15 +165,16 @@ Catalog discovery, workflow file save, workflow selection, and execution
 always stay on the local Python process. Starting the Studio never makes a
 required network request. If the hosted server is unavailable—or when
 `--offline` is used—the local catalog, canvas, workflow files, and `main.py`
-execution continue to work. Only account, Marketplace browsing, upload, and
-update checks are unavailable.
+execution continue to work. Account and Marketplace features are unavailable,
+but the bundled GitHub Releases link remains visible; downloading a release
+still requires an Internet connection.
 
 ### Hosted API proxy and account connection
 
 The local HTML always uses same-origin `/api` URLs. The Python process proxies
 only this fixed allowlist to the configured HTTPS platform:
 
-- health, session, and Pipeline Tool release checks/downloads;
+- health, session, and Pipeline Tool release metadata/legacy redirects;
 - Marketplace workflow and module list/item reads and uploads;
 - Marketplace module ZIP downloads;
 - the local-connect PKCE exchange.

@@ -160,6 +160,8 @@ const LOCAL_STUDIO_ROOT_CACHE_KEY = "infrax-local-studio-root-cache:v1";
 const PIPELINE_TOOL_VERSION = String(
   document.documentElement.dataset.pipelineToolVersion || ""
 ).trim();
+const PIPELINE_TOOL_GIT_URL = "https://github.com/ds-infrax/InfraX-Pipeline-Tool";
+const PIPELINE_TOOL_RELEASES_URL = `${PIPELINE_TOOL_GIT_URL}/releases/latest`;
 const INJECTED_LOCAL_TOOL_TOKEN = String(
   document.documentElement.dataset.localToolToken || ""
 ).trim();
@@ -1847,16 +1849,49 @@ function compareSemanticVersions(left, right) {
   return 0;
 }
 
-function pipelineToolDownloadUrl(release = pipelineToolRelease) {
-  if (LOCAL_STUDIO_MODE && semanticVersionParts(release?.version)) {
-    return apiUrl(
-      `/pipeline-tool/releases/${encodeURIComponent(release.version)}/download`
-    );
-  }
-  const value = String(release?.downloadUrl || "").trim();
-  if (!value) return "";
+function pipelineToolReleaseUrl(release) {
+  const resolvedRelease = release === undefined
+    ? pipelineToolRelease || {
+      source: "git",
+      repositoryUrl: PIPELINE_TOOL_GIT_URL,
+      downloadUrl: PIPELINE_TOOL_RELEASES_URL,
+    }
+    : release;
+  if (resolvedRelease?.source !== "git") return "";
+  const repositoryValue = String(
+    resolvedRelease.repositoryUrl || PIPELINE_TOOL_GIT_URL
+  ).trim();
+  const downloadValue = String(resolvedRelease.downloadUrl || "").trim();
+  if (!repositoryValue) return "";
   try {
-    return new URL(value, API_BASE_URL).toString();
+    const repositoryUrl = new URL(repositoryValue);
+    const repositoryPath = repositoryUrl.pathname
+      .replace(/\/+$/, "")
+      .replace(/\.git$/i, "");
+    const url = new URL(
+      downloadValue
+        || `https://github.com${repositoryPath}/releases/latest`
+    );
+    if (
+      repositoryUrl.protocol !== "https:"
+      || repositoryUrl.hostname.toLowerCase() !== "github.com"
+      || repositoryUrl.username
+      || repositoryUrl.password
+      || repositoryUrl.port
+      || repositoryUrl.search
+      || repositoryUrl.hash
+      || !/^\/[^/]+\/[^/]+$/.test(repositoryPath)
+      || url.protocol !== "https:"
+      || url.hostname.toLowerCase() !== "github.com"
+      || url.username
+      || url.password
+      || url.port
+      || (
+        url.pathname !== `${repositoryPath}/releases`
+        && !url.pathname.startsWith(`${repositoryPath}/releases/`)
+      )
+    ) return "";
+    return url.toString();
   } catch {
     return "";
   }
@@ -1898,56 +1933,63 @@ function renderPipelineToolRelease() {
   );
 
   if (pipelineToolReleaseStatus === "loading") {
-    title.textContent = "Pipeline Tool 최신 버전 확인 중";
+    title.textContent = "Pipeline Tool Git 배포본 확인 중";
     description.textContent = "서버 확인과 관계없이 로컬 노드 탐색, 워크플로우 저장과 실행은 계속 사용할 수 있습니다.";
     meta.innerHTML = PIPELINE_TOOL_VERSION
       ? `<span>현재 v${escapeHtml(PIPELINE_TOOL_VERSION)}</span>`
       : "";
-    downloadButton.disabled = true;
-    downloadLabel.textContent = "버전 확인 중";
+    downloadButton.disabled = false;
+    downloadLabel.textContent = "GitHub Releases 열기";
     return;
   }
 
   if (pipelineToolReleaseStatus === "error" || !pipelineToolRelease) {
-    title.textContent = LOCAL_STUDIO_MODE ? "서버 없이 로컬 모드로 실행 중" : "배포 버전을 불러오지 못했습니다";
+    title.textContent = LOCAL_STUDIO_MODE ? "서버 없이 로컬 모드로 실행 중" : "GitHub에서 Pipeline Tool 받기";
     description.textContent = LOCAL_STUDIO_MODE
-      ? "Marketplace와 업데이트 알림만 잠시 사용할 수 없습니다. 편집, catalog 탐색, 파일 저장과 main.py 실행에는 영향이 없습니다."
-      : `Pipeline Tool 배포 정보를 확인하지 못했습니다.${pipelineToolReleaseError ? ` ${pipelineToolReleaseError}` : ""}`;
+      ? "Marketplace와 버전 확인만 잠시 사용할 수 없습니다. 편집, catalog 탐색, 파일 저장과 main.py 실행에는 영향이 없으며 GitHub 다운로드 링크는 계속 사용할 수 있습니다."
+      : "배포 파일은 중앙 서버가 아닌 GitHub Releases에서 직접 제공합니다.";
     meta.innerHTML = PIPELINE_TOOL_VERSION
       ? `<span>설치 버전 v${escapeHtml(PIPELINE_TOOL_VERSION)}</span><span>로컬 기능 정상</span>`
-      : "";
-    downloadButton.disabled = true;
-    downloadLabel.textContent = "서버 연결 필요";
+      : "<span>GitHub Releases</span>";
+    downloadButton.disabled = false;
+    downloadLabel.textContent = "GitHub Releases 열기";
     return;
   }
 
-  const latestVersion = String(pipelineToolRelease.version || "");
-  const versionComparison = LOCAL_STUDIO_MODE
+  const latestVersion = String(pipelineToolRelease.version || "").trim();
+  const hasLatestVersion = Boolean(semanticVersionParts(latestVersion));
+  const versionComparison = LOCAL_STUDIO_MODE && hasLatestVersion
     ? compareSemanticVersions(PIPELINE_TOOL_VERSION, latestVersion)
     : null;
   const updateAvailable = LOCAL_STUDIO_MODE
     && Boolean(PIPELINE_TOOL_VERSION)
+    && hasLatestVersion
     && versionComparison != null
     && versionComparison < 0;
   panel.classList.toggle("is-update", updateAvailable);
   title.textContent = LOCAL_STUDIO_MODE
     ? updateAvailable
       ? `Pipeline Tool v${latestVersion} 업데이트가 있습니다`
-      : `Pipeline Tool v${PIPELINE_TOOL_VERSION || latestVersion} 사용 중`
-    : `Pipeline Tool v${latestVersion} 다운로드`;
+      : hasLatestVersion
+        ? `Pipeline Tool v${PIPELINE_TOOL_VERSION || latestVersion} 사용 중`
+        : "Git에서 최신 Pipeline Tool 확인"
+    : hasLatestVersion
+      ? `Pipeline Tool v${latestVersion} · GitHub Releases`
+      : "Git에서 최신 Pipeline Tool 확인";
   const releaseNotes = Array.isArray(pipelineToolRelease.releaseNotes)
     ? pipelineToolRelease.releaseNotes.filter(Boolean).join(" · ")
     : String(pipelineToolRelease.releaseNotes || "");
   description.textContent = updateAvailable
-    ? `${releaseNotes || "새 기능과 안정성 개선이 포함되어 있습니다."} 기존 workflows, custom_nodes, models 폴더는 보존한 뒤 새 버전으로 교체하세요.`
+    ? `${releaseNotes || "GitHub에 새 배포본이 등록되었습니다."} 기존 workflows, custom_nodes, models 폴더는 보존한 뒤 새 버전으로 교체하세요.`
     : LOCAL_STUDIO_MODE
-      ? "현재 로컬 실행기는 서버 연결 없이도 독립적으로 동작합니다."
-      : releaseNotes || "압축을 풀고 run_studio.bat을 실행하면 로컬 Workflow Studio가 시작됩니다.";
+      ? "현재 로컬 실행기는 서버 연결 없이도 독립적으로 동작합니다. 업데이트가 필요할 때만 GitHub Releases를 확인하세요."
+      : releaseNotes || "GitHub Releases에서 최신 ZIP을 받은 뒤 압축을 풀고 run_studio.bat을 실행하세요.";
   meta.innerHTML = [
     LOCAL_STUDIO_MODE && PIPELINE_TOOL_VERSION
       ? `<span>현재 v${escapeHtml(PIPELINE_TOOL_VERSION)}</span>`
       : "",
-    `<span>최신 v${escapeHtml(latestVersion)}</span>`,
+    hasLatestVersion ? `<span>최신 v${escapeHtml(latestVersion)}</span>` : "",
+    "<span>GitHub Releases</span>",
     pipelineToolRelease.size
       ? `<span>${escapeHtml(formatFileSize(Number(pipelineToolRelease.size)))}</span>`
       : "",
@@ -1955,10 +1997,10 @@ function renderPipelineToolRelease() {
       ? `<span>${escapeHtml(new Date(pipelineToolRelease.publishedAt).toLocaleDateString("ko-KR"))}</span>`
       : "",
   ].filter(Boolean).join("");
-  downloadButton.disabled = !pipelineToolDownloadUrl();
+  downloadButton.disabled = !pipelineToolReleaseUrl();
   downloadLabel.textContent = LOCAL_STUDIO_MODE
-    ? updateAvailable ? "새 버전 ZIP 받기" : "배포 ZIP 다시 받기"
-    : "Windows 로컬 Tool 받기";
+    ? updateAvailable ? "새 버전 GitHub에서 받기" : "GitHub Releases 열기"
+    : "GitHub Releases 열기";
 }
 
 async function syncPipelineToolRelease(options = {}) {
@@ -1975,7 +2017,15 @@ async function syncPipelineToolRelease(options = {}) {
     const result = await response.json().catch(() => ({}));
     if (requestId !== pipelineToolReleaseRequestSequence) return null;
     const release = result.release || result;
-    if (!response.ok || !semanticVersionParts(release?.version) || !release?.downloadUrl) {
+    const versionIsValid = release?.version == null
+      || release.version === ""
+      || Boolean(semanticVersionParts(release.version));
+    if (
+      !response.ok
+      || release?.source !== "git"
+      || !versionIsValid
+      || !pipelineToolReleaseUrl(release)
+    ) {
       throw new Error(responseErrorMessage(response, result));
     }
     pipelineToolRelease = release;
@@ -1998,13 +2048,10 @@ async function syncPipelineToolRelease(options = {}) {
 }
 
 function downloadLatestPipelineTool() {
-  const href = pipelineToolDownloadUrl();
+  const href = pipelineToolReleaseUrl();
   if (!href) return;
-  const anchor = document.createElement("a");
-  anchor.href = href;
-  anchor.download = pipelineToolRelease?.fileName || "";
-  anchor.rel = "noopener";
-  anchor.click();
+  const popup = window.open(href, "_blank", "noopener,noreferrer");
+  if (popup) popup.opener = null;
 }
 
 function platformSiteUrl() {
