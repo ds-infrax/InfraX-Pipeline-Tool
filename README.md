@@ -65,6 +65,76 @@ python main.py workflows/sample_custom.json
 python catalog.py
 ```
 
+## Connect the Browser Studio
+
+Start the local bridge before opening the browser workflow editor:
+
+```powershell
+python studio_bridge.py
+```
+
+The bridge listens only on `http://127.0.0.1:8765`. It prints a new pairing
+token every time it starts. Copy that token into the Studio's **local tool
+pairing** field. The token is intentionally not saved to disk.
+
+Set the Studio's **execution tool folder** to the absolute path of the
+`InfraX-Pipeline-Tool` folder. Leaving it empty selects the folder containing
+`studio_bridge.py`. After the bridge validates `catalog.py`, `main.py`, and the
+`workflow` package, the Studio stores the canonical path in account-scoped
+browser local storage. Every page load creates a new in-memory tool context
+before catalog or workflow requests are sent. Context IDs are not persisted,
+and separate tabs can safely use different tool folders.
+
+After pairing, the Studio uses the bridge as follows:
+
+1. It calls `POST /tool-contexts` with the saved execution tool path.
+2. On first connection it calls `POST /catalog/refresh`. The bridge runs
+   `catalog.py` in that tool context and returns the newly written
+   `catalog.json`.
+3. Browser edits continue to auto-save a single draft in browser local storage.
+4. The explicit workflow save action writes UTF-8 JSON atomically under
+   `workflows/`.
+5. A saved workflow can be run through `main.py` from the Studio.
+
+The bridge does not provide arbitrary command or filesystem access. Workflow
+filenames must be plain `.json` basenames, request bodies are size-limited, and
+catalog generation and workflow execution have timeouts. Browser requests must
+come from an exact allowed Origin and include:
+
+```http
+Authorization: Bearer <pairing-token>
+X-InfraX-Tool-Context: <temporary-context-id>
+```
+
+The built-in Origin list includes `https://106.254.226.206`,
+`https://infrax.iptime.org`, and common local development ports. The Studio
+path (for example `/pipeline`) is not part of the browser Origin. If a
+different Studio Origin is needed, add that exact Origin when starting the
+bridge:
+
+```powershell
+python studio_bridge.py --allow-origin https://studio.example
+```
+
+Available endpoints:
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/health` | Check whether the bridge is running; no token required |
+| `POST` | `/tool-contexts` | Validate a tool folder and create a temporary context |
+| `POST` | `/catalog/refresh` | Run `catalog.py` and return the updated catalog |
+| `GET` | `/catalog` | Read the current `catalog.json` |
+| `GET` | `/workflows` | List valid JSON files under `workflows/` |
+| `GET` | `/workflows/{filename}` | Read one saved workflow |
+| `PUT` | `/workflows/{filename}` | Atomically save one workflow |
+| `POST` | `/workflows/{filename}/run` | Run the saved file with `main.py` |
+
+Run the bridge tests with:
+
+```powershell
+python -m unittest -v test_studio_bridge
+```
+
 ## Custom Nodes
 
 Each project can live as its own git repo under `custom_nodes/`.

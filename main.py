@@ -13,4 +13,5 @@ if __name__ == "__main__":
     if not workflow.is_absolute():
         workflow = Path(__file__).parent / workflow
 
-    run_workflow(workflow)
+    if run_workflow(workflow) is None:
+        raise SystemExit(1)
