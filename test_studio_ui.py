@@ -6,6 +6,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 APP_SOURCE = (ROOT / "studio_web" / "app.js").read_text(encoding="utf-8")
 STYLE_SOURCE = (ROOT / "studio_web" / "styles.css").read_text(encoding="utf-8")
+HTML_SOURCE = (ROOT / "studio_web" / "index.html").read_text(encoding="utf-8")
 ORCHID_ASSET = ROOT / "studio_web" / "assets" / "ink-orchid-watermark.jpg"
 
 
@@ -80,6 +81,46 @@ class StudioCanvasArtworkTest(unittest.TestCase):
         )
         self.assertIsNotNone(responsive)
         self.assertIn(".canvas-shell::after", responsive.group("body"))
+
+
+class StudioPanelCollapseTest(unittest.TestCase):
+    def test_panel_toggles_are_accessible_and_keep_the_rail_separate(self):
+        self.assertIn('id="toggleSidebarBtn"', HTML_SOURCE)
+        self.assertIn('aria-controls="workflowSidebar"', HTML_SOURCE)
+        self.assertIn('id="toggleInspectorBtn"', HTML_SOURCE)
+        self.assertIn('aria-controls="workflowInspector"', HTML_SOURCE)
+        self.assertEqual(HTML_SOURCE.count('aria-expanded="true"'), 2)
+        self.assertRegex(
+            STYLE_SOURCE,
+            r"\.studio-layout\.sidebar-collapsed\s*\{[^}]*"
+            r"grid-template-columns:\s*var\(--rail-width\)\s+0",
+        )
+
+    def test_panel_state_is_persisted_with_safe_storage_access(self):
+        self.assertIn('PANEL_STATE_STORAGE_KEY = "infrax.studio.panel-state.v1"', APP_SOURCE)
+        read_state = APP_SOURCE[
+            APP_SOURCE.index("function readPanelState()"):
+            APP_SOURCE.index("function writePanelState(state)")
+        ]
+        write_state = APP_SOURCE[
+            APP_SOURCE.index("function writePanelState(state)"):
+            APP_SOURCE.index("function updatePanelToggle")
+        ]
+        self.assertIn("try {", read_state)
+        self.assertIn("catch {", read_state)
+        self.assertIn("try {", write_state)
+        self.assertIn("catch {}", write_state)
+
+    def test_edge_controls_remain_in_the_canvas_when_panels_are_collapsed(self):
+        canvas_start = HTML_SOURCE.index('<main class="canvas-shell"')
+        canvas_end = HTML_SOURCE.index("</main>", canvas_start)
+        canvas_markup = HTML_SOURCE[canvas_start:canvas_end]
+        self.assertIn('class="panel-edge-toggle panel-edge-toggle-left"', canvas_markup)
+        self.assertIn('class="panel-edge-toggle panel-edge-toggle-right"', canvas_markup)
+        self.assertRegex(
+            STYLE_SOURCE,
+            r"\.panel-edge-toggle\s*\{[^}]*position:\s*absolute;[^}]*z-index:\s*58;",
+        )
 
 
 if __name__ == "__main__":

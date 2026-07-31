@@ -892,6 +892,80 @@ const selectedInfo = document.getElementById("selectedInfo");
 const jsonInput = document.getElementById("jsonInput");
 const jsonHint = document.getElementById("jsonHint");
 const canvasShell = document.getElementById("canvasShell");
+const studioLayout = document.getElementById("studioLayout");
+const workflowSidebar = document.getElementById("workflowSidebar");
+const workflowInspector = document.getElementById("workflowInspector");
+const toggleSidebarBtn = document.getElementById("toggleSidebarBtn");
+const toggleInspectorBtn = document.getElementById("toggleInspectorBtn");
+const PANEL_STATE_STORAGE_KEY = "infrax.studio.panel-state.v1";
+
+function readPanelState() {
+  try {
+    const state = JSON.parse(localStorage.getItem(PANEL_STATE_STORAGE_KEY) || "{}");
+    return {
+      sidebarCollapsed: state.sidebarCollapsed === true,
+      inspectorCollapsed: state.inspectorCollapsed === true,
+    };
+  } catch {
+    return { sidebarCollapsed: false, inspectorCollapsed: false };
+  }
+}
+
+function writePanelState(state) {
+  try {
+    localStorage.setItem(PANEL_STATE_STORAGE_KEY, JSON.stringify(state));
+  } catch {}
+}
+
+function updatePanelToggle(button, panel, collapsed, side) {
+  if (!button || !panel) return;
+  const panelName = side === "left" ? "워크플로우" : "인스펙터";
+  const action = collapsed ? "펼치기" : "접기";
+  button.setAttribute("aria-expanded", String(!collapsed));
+  button.setAttribute("aria-label", `${panelName} 패널 ${action}`);
+  button.title = `${panelName} 패널 ${action}`;
+  const icon = button.querySelector(".material-symbols-outlined");
+  if (icon) {
+    icon.textContent = side === "left"
+      ? (collapsed ? "left_panel_open" : "left_panel_close")
+      : (collapsed ? "right_panel_open" : "right_panel_close");
+  }
+  panel.setAttribute("aria-hidden", String(collapsed));
+}
+
+function applyPanelState(state, { persist = false } = {}) {
+  if (!studioLayout) return;
+  studioLayout.classList.toggle("sidebar-collapsed", state.sidebarCollapsed);
+  studioLayout.classList.toggle("inspector-collapsed", state.inspectorCollapsed);
+  updatePanelToggle(toggleSidebarBtn, workflowSidebar, state.sidebarCollapsed, "left");
+  updatePanelToggle(toggleInspectorBtn, workflowInspector, state.inspectorCollapsed, "right");
+  if (persist) writePanelState(state);
+  requestAnimationFrame(() => {
+    renderLinks();
+    window.dispatchEvent(new Event("resize"));
+  });
+}
+
+function currentPanelState() {
+  return {
+    sidebarCollapsed: studioLayout?.classList.contains("sidebar-collapsed") || false,
+    inspectorCollapsed: studioLayout?.classList.contains("inspector-collapsed") || false,
+  };
+}
+
+applyPanelState(readPanelState());
+
+toggleSidebarBtn?.addEventListener("click", () => {
+  const state = currentPanelState();
+  state.sidebarCollapsed = !state.sidebarCollapsed;
+  applyPanelState(state, { persist: true });
+});
+
+toggleInspectorBtn?.addEventListener("click", () => {
+  const state = currentPanelState();
+  state.inspectorCollapsed = !state.inspectorCollapsed;
+  applyPanelState(state, { persist: true });
+});
 
 function renderAll() {
   normalizeWorkflowShape(currentWorkflow);

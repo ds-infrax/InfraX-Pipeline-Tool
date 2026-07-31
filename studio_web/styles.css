@@ -465,10 +465,72 @@ h3 {
 }
 
 .studio-layout {
+  position: relative;
   display: grid;
   grid-template-columns: var(--rail-width) var(--sidebar-width) minmax(460px, 1fr) var(--inspector-width);
   height: calc(100vh - var(--topbar-height));
   min-height: 0;
+}
+
+.studio-layout.sidebar-collapsed {
+  grid-template-columns: var(--rail-width) 0 minmax(460px, 1fr) var(--inspector-width);
+}
+
+.studio-layout.inspector-collapsed {
+  grid-template-columns: var(--rail-width) var(--sidebar-width) minmax(460px, 1fr) 0;
+}
+
+.studio-layout.sidebar-collapsed.inspector-collapsed {
+  grid-template-columns: var(--rail-width) 0 minmax(460px, 1fr) 0;
+}
+
+.studio-layout.sidebar-collapsed .sidebar,
+.studio-layout.inspector-collapsed .inspector {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.panel-edge-toggle {
+  position: absolute;
+  z-index: 58;
+  top: 50%;
+  display: grid;
+  width: 28px;
+  height: 52px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  background: color-mix(in srgb, var(--surface-lowest) 88%, transparent);
+  color: var(--on-surface-variant);
+  box-shadow: 0 12px 30px rgba(44, 58, 78, 0.12);
+  backdrop-filter: blur(16px);
+  transform: translateY(-50%);
+  transition: color 150ms ease, background-color 150ms ease, box-shadow 150ms ease;
+}
+
+.panel-edge-toggle:hover {
+  background: var(--primary-container);
+  color: var(--on-primary);
+  box-shadow: 0 14px 34px rgba(65, 104, 215, 0.18);
+}
+
+.panel-edge-toggle:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.panel-edge-toggle .material-symbols-outlined {
+  font-size: 19px;
+}
+
+.panel-edge-toggle-left {
+  left: 0;
+  border-radius: 0 11px 11px 0;
+}
+
+.panel-edge-toggle-right {
+  right: 0;
+  border-radius: 11px 0 0 11px;
 }
 
 .app-rail {
@@ -1004,24 +1066,19 @@ textarea:hover {
 .canvas-shell::after {
   position: absolute;
   z-index: 1;
-  top: -5%;
-  right: clamp(-150px, -7vw, -54px);
-  width: clamp(420px, 44vw, 760px);
-  height: 110%;
-  background: url("./assets/ink-orchid-watermark.jpg") 72% 56% / auto 114% no-repeat;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: clamp(360px, 38vw, 650px);
+  height: 100%;
+  background: url("./assets/ink-orchid-watermark.jpg") right bottom / contain no-repeat;
   content: "";
   filter: contrast(0.84) sepia(0.08) hue-rotate(174deg) saturate(0.62);
   mix-blend-mode: multiply;
   opacity: 0.105;
   pointer-events: none;
-  -webkit-mask-image:
-    linear-gradient(to left, #000 62%, transparent 100%),
-    linear-gradient(to bottom, transparent, #000 8%, #000 91%, transparent);
-  mask-image:
-    linear-gradient(to left, #000 62%, transparent 100%),
-    linear-gradient(to bottom, transparent, #000 8%, #000 91%, transparent);
-  -webkit-mask-composite: source-in;
-  mask-composite: intersect;
+  -webkit-mask-image: linear-gradient(to left, #000 70%, transparent 100%);
+  mask-image: linear-gradient(to left, #000 70%, transparent 100%);
 }
 
 .canvas-meta {
@@ -2759,8 +2816,10 @@ textarea:hover {
   }
 
   .canvas-shell::after {
-    right: -140px;
-    width: clamp(360px, 44vw, 560px);
+    right: 0;
+    bottom: 0;
+    width: clamp(320px, 40vw, 520px);
+    height: 100%;
     opacity: 0.085;
   }
 }
@@ -2775,7 +2834,16 @@ textarea:hover {
     grid-template-columns: var(--rail-width) var(--sidebar-width) minmax(460px, 1fr);
   }
 
+  .studio-layout.sidebar-collapsed,
+  .studio-layout.sidebar-collapsed.inspector-collapsed {
+    grid-template-columns: var(--rail-width) 0 minmax(460px, 1fr);
+  }
+
   .inspector {
+    display: none;
+  }
+
+  .panel-edge-toggle-right {
     display: none;
   }
 

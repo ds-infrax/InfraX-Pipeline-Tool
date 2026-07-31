@@ -52,7 +52,7 @@
       </div>
     </header>
 
-    <div class="studio-layout">
+    <div class="studio-layout" id="studioLayout">
       <nav class="app-rail" aria-label="주요 메뉴">
         <div class="rail-menu">
           <button class="rail-button icon-tab active" type="button" data-target="workflowSection" title="워크플로우">
@@ -79,7 +79,7 @@
         </div>
       </nav>
 
-      <aside class="sidebar" aria-label="워크플로우 탐색기">
+      <aside class="sidebar" id="workflowSidebar" aria-label="워크플로우 탐색기">
         <div
           class="project-context local-tool-context"
           id="localToolContextPanel"
@@ -189,6 +189,28 @@
       </aside>
 
       <main class="canvas-shell" id="canvasShell" aria-label="워크플로우 캔버스">
+        <button
+          class="panel-edge-toggle panel-edge-toggle-left"
+          id="toggleSidebarBtn"
+          type="button"
+          aria-label="워크플로우 패널 접기"
+          aria-controls="workflowSidebar"
+          aria-expanded="true"
+          title="워크플로우 패널 접기"
+        >
+          <span class="material-symbols-outlined" aria-hidden="true">left_panel_close</span>
+        </button>
+        <button
+          class="panel-edge-toggle panel-edge-toggle-right"
+          id="toggleInspectorBtn"
+          type="button"
+          aria-label="인스펙터 패널 접기"
+          aria-controls="workflowInspector"
+          aria-expanded="true"
+          title="인스펙터 패널 접기"
+        >
+          <span class="material-symbols-outlined" aria-hidden="true">right_panel_close</span>
+        </button>
         <div class="canvas-meta">
           <span class="canvas-chip" id="nodeCount">0 nodes</span>
           <span class="canvas-chip" id="linkCount">0 links</span>
@@ -251,7 +273,7 @@
         </div>
       </main>
 
-      <aside class="inspector" aria-label="선택 객체 설정">
+      <aside class="inspector" id="workflowInspector" aria-label="선택 객체 설정">
         <div class="inspector-header">
           <span class="eyebrow">INSPECTOR</span>
           <div class="inspector-title">
