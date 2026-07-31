@@ -1346,8 +1346,24 @@ textarea:hover {
 .node-body {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 5px 12px;
+  align-items: start;
+  gap: 6px 12px;
   padding: 11px 0 12px;
+}
+
+.node-inputs,
+.node-outputs {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.node-inputs {
+  grid-column: 1;
+}
+
+.node-outputs {
+  grid-column: 2;
 }
 
 .port-row {
@@ -1363,13 +1379,11 @@ textarea:hover {
 }
 
 .port-row.input {
-  grid-column: 1;
   justify-content: flex-start;
   padding-left: 12px;
 }
 
 .port-row.output {
-  grid-column: 2;
   justify-content: flex-end;
   padding-right: 12px;
   text-align: right;
@@ -1400,8 +1414,46 @@ textarea:hover {
   box-shadow: 0 0 0 2px #7c6b60;
 }
 
-.widget-row {
+.node-widgets {
   grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px 12px;
+  min-width: 0;
+  padding: 0 12px;
+}
+
+.widget {
+  display: flex;
+  min-width: 0;
+  min-height: 22px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--on-surface-variant);
+  font-size: 9px;
+  font-weight: 400;
+}
+
+.widget-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.widget-value {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--on-surface);
+  font: inherit;
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.widget-value-only {
+  justify-content: flex-start;
 }
 
 .node-body input,

@@ -1191,7 +1191,12 @@ function getInitInputsForNode(node) {
     return Object.keys(node.init_values).map(name => ({ name, type: typeof node.init_values[name], default: node.init_values[name] }));
   }
   if (Array.isArray(node?.widgets_values)) {
-    return node.widgets_values.map((value, index) => ({ name: `value_${index + 1}`, type: typeof value, default: value }));
+    return node.widgets_values.map((value, index) => ({
+      name: `value_${index + 1}`,
+      type: typeof value,
+      default: value,
+      syntheticLabel: true,
+    }));
   }
   return [];
 }
@@ -2881,7 +2886,11 @@ function renderNodes() {
         <span class="node-title">${escapeHtml(displayNodeTitle(node))}</span>
         <span class="node-type-chip">${escapeHtml(node.type)}</span>
       </div>
-      <div class="node-body">${inputs}${widgets}${outputs}</div>
+      <div class="node-body">
+        ${widgets ? `<div class="node-widgets">${widgets}</div>` : ""}
+        ${inputs ? `<div class="node-inputs">${inputs}</div>` : ""}
+        ${outputs ? `<div class="node-outputs">${outputs}</div>` : ""}
+      </div>
     `;
     el.addEventListener("click", () => {
       if (!pendingLinkPort && !pendingLinkReconnect) {
@@ -5409,9 +5418,18 @@ function renderWidgets(node) {
   const initInputs = getInitInputsForNode(node);
   if (!initInputs.length) return "";
   syncWidgetValuesFromInit(node);
-  return initInputs.map((input, index) => `
-    <div class="widget"><span>${escapeHtml(input.name)}</span><strong>${escapeHtml(node.widgets_values?.[index] ?? "")}</strong></div>
-  `).join("");
+  return initInputs.map((input, index) => {
+    const value = node.widgets_values?.[index] ?? "";
+    const label = input.syntheticLabel
+      ? ""
+      : `<span class="widget-label">${escapeHtml(input.name)}</span>`;
+    return `
+      <div class="widget ${input.syntheticLabel ? "widget-value-only" : ""}">
+        ${label}
+        <span class="widget-value">${escapeHtml(value)}</span>
+      </div>
+    `;
+  }).join("");
 }
 
 function renderWidgetEditors(node) {
