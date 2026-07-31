@@ -6,6 +6,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 APP_SOURCE = (ROOT / "studio_web" / "app.js").read_text(encoding="utf-8")
 STYLE_SOURCE = (ROOT / "studio_web" / "styles.css").read_text(encoding="utf-8")
+ORCHID_ASSET = ROOT / "studio_web" / "assets" / "ink-orchid-watermark.jpg"
 
 
 class StudioNodeWidgetRenderingTest(unittest.TestCase):
@@ -49,6 +50,36 @@ class StudioNodeWidgetRenderingTest(unittest.TestCase):
         self.assertIsNotNone(value_style)
         self.assertIn("font: inherit", value_style.group("body"))
         self.assertIn("font-weight: 400", value_style.group("body"))
+
+
+class StudioCanvasArtworkTest(unittest.TestCase):
+    def test_orchid_watermark_asset_is_packaged(self):
+        self.assertTrue(ORCHID_ASSET.is_file())
+        self.assertGreater(ORCHID_ASSET.stat().st_size, 10_000)
+
+    def test_orchid_watermark_stays_below_interactive_world(self):
+        artwork = re.search(
+            r"\.canvas-shell::after\s*\{(?P<body>.*?)\}",
+            STYLE_SOURCE,
+            re.DOTALL,
+        )
+        world = re.search(r"\.world\s*\{(?P<body>.*?)\}", STYLE_SOURCE, re.DOTALL)
+        self.assertIsNotNone(artwork)
+        self.assertIsNotNone(world)
+        self.assertIn('url("./assets/ink-orchid-watermark.jpg")', artwork.group("body"))
+        self.assertIn("pointer-events: none", artwork.group("body"))
+        self.assertIn("z-index: 1", artwork.group("body"))
+        self.assertIn("z-index: 2", world.group("body"))
+
+    def test_orchid_watermark_has_responsive_treatment(self):
+        responsive = re.search(
+            r"@media \(max-width: 1280px\)\s*\{(?P<body>.*?)"
+            r"@media \(max-width: 1060px\)",
+            STYLE_SOURCE,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(responsive)
+        self.assertIn(".canvas-shell::after", responsive.group("body"))
 
 
 if __name__ == "__main__":
