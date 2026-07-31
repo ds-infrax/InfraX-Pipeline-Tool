@@ -16,6 +16,8 @@ the API never accepts arbitrary file targets or commands.
 from __future__ import annotations
 
 import argparse
+import base64
+import ctypes
 import errno
 import hashlib
 import hmac
@@ -34,6 +36,7 @@ import tempfile
 import threading
 import webbrowser
 import zipfile
+from ctypes import wintypes
 from datetime import datetime, timezone
 from http import HTTPStatus
 from http.cookies import SimpleCookie
@@ -65,6 +68,7 @@ MAX_PLATFORM_EXCHANGE_RESPONSE = 1024 * 1024
 PACKAGE_REGISTRY_FILENAME = "package-registry.json"
 PACKAGE_MANIFEST_FILENAME = "infrax-package.json"
 TOOL_CONFIG_FILENAME = "tool-config.json"
+PLATFORM_CREDENTIAL_FILENAME = "marketplace-credentials.bin"
 
 _SEMVER_PATTERN = re.compile(
     r"(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)"
@@ -79,6 +83,7 @@ _LOCAL_CONNECT_CODE_PATTERN = re.compile(r"ixc_[A-Za-z0-9_-]{43}")
 _LOCAL_CONNECT_VERIFIER_PATTERN = re.compile(r"[A-Za-z0-9._~-]{43,128}")
 _LOCAL_CONNECT_STATE_PATTERN = re.compile(r"[A-Za-z0-9_-]{22,128}")
 _LOCAL_MARKETPLACE_TOKEN_PATTERN = re.compile(r"ixm_[A-Za-z0-9_-]{43}")
+_LOCAL_REFRESH_TOKEN_PATTERN = re.compile(r"ixr_[A-Za-z0-9_-]{43,256}")
 _LOCAL_SOURCE_EXCLUDED_DIRECTORIES = frozenset(
     {
         ".aws",
@@ -158,8 +163,6 @@ STUDIO_CONTENT_TYPES = {
 
 DEFAULT_ALLOWED_ORIGINS = frozenset(
     {
-        "https://infrax.iptime.org:3004",
-        "https://infrax.iptime.org",
         "https://106.254.226.206",
         "http://localhost:3000",
         "http://127.0.0.1:3000",
@@ -199,6 +202,103 @@ class BridgeError(Exception):
         self.code = code
         self.message = message
         self.details = details
+
+
+def _default_platform_credential_path() -> Path:
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if os.name == "nt" and local_app_data:
+        return Path(local_app_data) / "InfraX" / "PipelineTool" / PLATFORM_CREDENTIAL_FILENAME
+    return Path.home() / ".config" / "infrax-pipeline-tool" / PLATFORM_CREDENTIAL_FILENAME
+
+
+def _windows_dpapi(data: bytes, *, decrypt: bool = False) -> bytes:
+    """Protect credential bytes for the current Windows user."""
+
+    if os.name != "nt":
+        raise OSError("Windows DPAPI is unavailable")
+
+    class DATA_BLOB(ctypes.Structure):
+        _fields_ = [("cbData", wintypes.DWORD), ("pbData", ctypes.POINTER(ctypes.c_byte))]
+
+    source_buffer = ctypes.create_string_buffer(data)
+    source = DATA_BLOB(
+        len(data),
+        ctypes.cast(source_buffer, ctypes.POINTER(ctypes.c_byte)),
+    )
+    target = DATA_BLOB()
+    crypt32 = ctypes.windll.crypt32
+    kernel32 = ctypes.windll.kernel32
+    if decrypt:
+        ok = crypt32.CryptUnprotectData(
+            ctypes.byref(source), None, None, None, None, 0, ctypes.byref(target)
+        )
+    else:
+        ok = crypt32.CryptProtectData(
+            ctypes.byref(source),
+            "InfraX Pipeline Tool Marketplace",
+            None,
+            None,
+            None,
+            0x1,  # CRYPTPROTECT_UI_FORBIDDEN
+            ctypes.byref(target),
+        )
+    if not ok:
+        raise ctypes.WinError()
+    try:
+        return ctypes.string_at(target.pbData, target.cbData)
+    finally:
+        kernel32.LocalFree(target.pbData)
+
+
+class PlatformCredentialStore:
+    """DPAPI-backed refresh credential storage.
+
+    Other operating systems intentionally fall back to memory-only credentials
+    instead of writing a reusable bearer secret as plaintext.
+    """
+
+    def __init__(self, path: Path | None = None) -> None:
+        self.path = path or _default_platform_credential_path()
+        self._memory_refresh_token: str | None = None
+
+    def load(self) -> str | None:
+        if os.name != "nt":
+            return self._memory_refresh_token
+        try:
+            encoded = self.path.read_bytes()
+            payload = _windows_dpapi(base64.b64decode(encoded), decrypt=True)
+            document = json.loads(payload.decode("utf-8"))
+            token = document.get("refreshToken")
+            return token if isinstance(token, str) else None
+        except (OSError, ValueError, UnicodeDecodeError, json.JSONDecodeError):
+            return None
+
+    def save(self, refresh_token: str) -> None:
+        if _LOCAL_REFRESH_TOKEN_PATTERN.fullmatch(refresh_token) is None:
+            raise BridgeError(
+                HTTPStatus.BAD_GATEWAY,
+                "platform_exchange_invalid",
+                "Marketplace server returned an invalid refresh credential.",
+            )
+        self._memory_refresh_token = refresh_token
+        if os.name != "nt":
+            return
+        payload = json.dumps(
+            {"version": 1, "refreshToken": refresh_token},
+            separators=(",", ":"),
+        ).encode("utf-8")
+        protected = _windows_dpapi(payload)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.path.with_suffix(".tmp")
+        temporary.write_bytes(base64.b64encode(protected))
+        os.replace(temporary, self.path)
+
+    def clear(self) -> None:
+        self._memory_refresh_token = None
+        try:
+            self.path.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def _safe_workflow_filename(value: str) -> str:
@@ -475,8 +575,11 @@ def _platform_proxy_suffix(method: str, segments: list[str]) -> str | None:
             + quote(decoded[2], safe="")
             + "/download"
         )
-    if decoded == ["local-connect", "exchange"] and method == "POST":
-        return "/local-connect/exchange"
+    if decoded in (
+        ["local-connect", "exchange"],
+        ["local-connect", "logout"],
+    ) and method == "POST":
+        return "/" + "/".join(decoded)
     if (
         decoded in (["marketplace", "workflows"], ["marketplace", "modules"])
         and method == "GET"
@@ -2070,6 +2173,7 @@ class StudioBridgeServer(ThreadingHTTPServer):
         studio_root: Path | str | None = None,
         platform_api_base: str | None = None,
         offline: bool = False,
+        platform_credential_path: Path | None = None,
     ) -> None:
         self.state = state
         self.studio_root = (
@@ -2083,6 +2187,10 @@ class StudioBridgeServer(ThreadingHTTPServer):
         )
         self.platform_token_lock = threading.Lock()
         self._platform_access_token: str | None = None
+        self.platform_credential_store = PlatformCredentialStore(
+            platform_credential_path
+        )
+        self._platform_refresh_token = self.platform_credential_store.load()
         super().__init__(server_address, StudioBridgeHandler)
         self.tool_contexts: dict[str, BridgeState] = {}
         self.tool_root_states: dict[str, BridgeState] = {
@@ -2119,6 +2227,21 @@ class StudioBridgeServer(ThreadingHTTPServer):
         with self.platform_token_lock:
             self._platform_access_token = token
 
+    def get_platform_refresh_token(self) -> str | None:
+        with self.platform_token_lock:
+            return self._platform_refresh_token
+
+    def set_platform_refresh_token(self, token: str) -> None:
+        self.platform_credential_store.save(token)
+        with self.platform_token_lock:
+            self._platform_refresh_token = token
+
+    def clear_platform_credentials(self) -> None:
+        with self.platform_token_lock:
+            self._platform_access_token = None
+            self._platform_refresh_token = None
+        self.platform_credential_store.clear()
+
     def clear_platform_access_token(self, expected: str | None = None) -> None:
         with self.platform_token_lock:
             if expected is None or hmac.compare_digest(
@@ -2128,6 +2251,8 @@ class StudioBridgeServer(ThreadingHTTPServer):
                 self._platform_access_token = None
 
     def server_close(self) -> None:
+        # The access token is process-local. The DPAPI-protected refresh
+        # credential intentionally survives normal shutdown until logout.
         self.clear_platform_access_token()
         super().server_close()
 
@@ -2670,6 +2795,8 @@ class StudioBridgeHandler(BaseHTTPRequestHandler):
             )
         if suffix == "/local-connect/exchange":
             self._proxy_local_connect_exchange(suffix)
+        elif suffix == "/local-connect/logout":
+            self._logout_platform_account()
         else:
             self._proxy_platform_request(method, suffix)
         return True
@@ -2746,7 +2873,7 @@ class StudioBridgeHandler(BaseHTTPRequestHandler):
             )
             response = connection.getresponse()
             if response.status in {HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN}:
-                self.server.clear_platform_access_token(token)
+                self.server.clear_platform_access_token()
             if response.status in {
                 HTTPStatus.MOVED_PERMANENTLY,
                 HTTPStatus.FOUND,
@@ -2988,7 +3115,7 @@ class StudioBridgeHandler(BaseHTTPRequestHandler):
                     connection.send(chunk)
             response = connection.getresponse()
             if response.status in {HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN}:
-                self.server.clear_platform_access_token(token)
+                self.server.clear_platform_access_token()
             self._relay_platform_response("PUT", response)
         except BridgeError:
             raise
@@ -3271,12 +3398,20 @@ class StudioBridgeHandler(BaseHTTPRequestHandler):
             self._send_json(response.status, sanitized or {"ok": False})
             return
         access_token = result.get("accessToken")
+        refresh_token = result.get("refreshToken")
         if not isinstance(access_token, str):
             raise BridgeError(
                 HTTPStatus.BAD_GATEWAY,
                 "platform_exchange_invalid",
                 "Marketplace 서버가 연결 토큰을 반환하지 않았습니다.",
             )
+        if not isinstance(refresh_token, str):
+            raise BridgeError(
+                HTTPStatus.BAD_GATEWAY,
+                "platform_exchange_invalid",
+                "Marketplace server did not return a refresh credential.",
+            )
+        self.server.set_platform_refresh_token(refresh_token)
         self.server.set_platform_access_token(access_token)
         self._send_json(
             HTTPStatus.OK,
@@ -3288,6 +3423,97 @@ class StudioBridgeHandler(BaseHTTPRequestHandler):
                 "user": result.get("user"),
             },
         )
+
+    def _refresh_platform_access_token(self) -> bool:
+        refresh_token = self.server.get_platform_refresh_token()
+        if not refresh_token:
+            return False
+        body = json.dumps(
+            {"refreshToken": refresh_token},
+            separators=(",", ":"),
+        ).encode("utf-8")
+        connection: http.client.HTTPSConnection | None = None
+        try:
+            connection, base_path = self.server.platform_connection()
+            connection.request(
+                "POST",
+                base_path + "/local-connect/refresh",
+                body=body,
+                headers={
+                    "Content-Type": "application/json",
+                    "Content-Length": str(len(body)),
+                    "Accept": "application/json",
+                    "User-Agent": f"InfraX-Pipeline-Tool/{TOOL_VERSION}",
+                    "Connection": "close",
+                },
+            )
+            response = connection.getresponse()
+            response_body = response.read(MAX_PLATFORM_EXCHANGE_RESPONSE + 1)
+            if not 200 <= response.status < 300:
+                if response.status in {
+                    HTTPStatus.BAD_REQUEST,
+                    HTTPStatus.UNAUTHORIZED,
+                    HTTPStatus.FORBIDDEN,
+                }:
+                    self.server.clear_platform_credentials()
+                return False
+            result = json.loads(response_body.decode("utf-8")) if response_body else {}
+            access_token = result.get("accessToken")
+            rotated_refresh = result.get("refreshToken")
+            if not isinstance(access_token, str) or not isinstance(rotated_refresh, str):
+                return False
+            self.server.set_platform_access_token(access_token)
+            self.server.set_platform_refresh_token(rotated_refresh)
+            return True
+        except (
+            OSError,
+            http.client.HTTPException,
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+        ):
+            # A temporary outage must not erase a valid long-lived credential.
+            return False
+        finally:
+            if connection is not None:
+                connection.close()
+
+    def _logout_platform_account(self) -> None:
+        refresh_token = self.server.get_platform_refresh_token()
+        access_token = self.server.get_platform_access_token()
+        if refresh_token:
+            body = json.dumps(
+                {"refreshToken": refresh_token},
+                separators=(",", ":"),
+            ).encode("utf-8")
+            connection: http.client.HTTPSConnection | None = None
+            try:
+                connection, base_path = self.server.platform_connection()
+                headers = {
+                    "Content-Type": "application/json",
+                    "Content-Length": str(len(body)),
+                    "Accept": "application/json",
+                    "User-Agent": f"InfraX-Pipeline-Tool/{TOOL_VERSION}",
+                    "Connection": "close",
+                }
+                if access_token:
+                    headers["Authorization"] = f"Bearer {access_token}"
+                connection.request(
+                    "POST",
+                    base_path + "/local-connect/logout",
+                    body=body,
+                    headers=headers,
+                )
+                response = connection.getresponse()
+                response.read(MAX_PLATFORM_EXCHANGE_RESPONSE + 1)
+            except (OSError, http.client.HTTPException):
+                # Logout remains effective locally even if remote revocation is
+                # temporarily unavailable.
+                pass
+            finally:
+                if connection is not None:
+                    connection.close()
+        self.server.clear_platform_credentials()
+        self._send_json(HTTPStatus.OK, {"ok": True, "connected": False})
 
     def _proxy_platform_request(self, method: str, suffix: str) -> None:
         content_length = self._proxy_request_content_length(method)
@@ -3340,8 +3566,23 @@ class StudioBridgeHandler(BaseHTTPRequestHandler):
                 connection.send(chunk)
                 remaining -= len(chunk)
             response = connection.getresponse()
+            if response.status == HTTPStatus.UNAUTHORIZED and content_length == 0:
+                response.read()
+                connection.close()
+                connection = None
+                if self._refresh_platform_access_token():
+                    connection, base_path = self.server.platform_connection()
+                    connection.putrequest(method, base_path + suffix, skip_accept_encoding=True)
+                    connection.putheader("Accept", self.headers.get("Accept", "*/*"))
+                    connection.putheader("User-Agent", f"InfraX-Pipeline-Tool/{TOOL_VERSION}")
+                    connection.putheader("Connection", "close")
+                    refreshed_token = self.server.get_platform_access_token()
+                    if refreshed_token:
+                        connection.putheader("Authorization", f"Bearer {refreshed_token}")
+                    connection.endheaders()
+                    response = connection.getresponse()
             if response.status in {HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN}:
-                self.server.clear_platform_access_token(token)
+                self.server.clear_platform_access_token()
             self._relay_platform_response(method, response)
         except BridgeError:
             raise
@@ -3720,6 +3961,7 @@ def create_server(
     studio_root: Path | str | None = None,
     platform_api_base: str | None = None,
     offline: bool = False,
+    platform_credential_path: Path | None = None,
 ) -> StudioBridgeServer:
     """Create a loopback-only server. ``port=0`` is useful for tests."""
 
@@ -3739,6 +3981,7 @@ def create_server(
         studio_root=studio_root,
         platform_api_base=platform_api_base,
         offline=offline,
+        platform_credential_path=platform_credential_path,
     )
 
 

@@ -148,9 +148,64 @@ class StudioSidebarNavigationTest(unittest.TestCase):
 
     def test_marketplace_entry_is_preserved(self):
         self.assertIn('id="marketplaceBtn"', HTML_SOURCE)
+        self.assertIn('title="운영 Marketplace 열기"', HTML_SOURCE)
+        self.assertIn("return new URL(MARKETPLACE_SITE_URL);", APP_SOURCE)
         self.assertIn(
-            'document.getElementById("marketplaceBtn").addEventListener("click", openMarketplaceView);',
+            'document.getElementById("marketplaceBtn").addEventListener("click", openHostedMarketplace);',
             APP_SOURCE,
+        )
+        self.assertIn('window.open(siteUrl.toString(), "_blank", "noopener,noreferrer")', APP_SOURCE)
+
+    def test_workflow_marketplace_button_connects_before_upload(self):
+        self.assertIn('class="button-label">Marketplace 계정 연결</span>', HTML_SOURCE)
+        self.assertIn('workflowMarketplaceButton.classList.toggle("is-progress", isCheckingAccount)', APP_SOURCE)
+        self.assertIn('"Marketplace 계정 확인 중"', APP_SOURCE)
+        self.assertIn('"Marketplace 업로드"', APP_SOURCE)
+        self.assertIn('"Marketplace 계정 연결"', APP_SOURCE)
+        self.assertIn("if (serverWritesEnabled())", APP_SOURCE)
+        self.assertIn("void openPlatformAccountConnect();", APP_SOURCE)
+        self.assertIn(
+            'const MARKETPLACE_SITE_URL = "https://106.254.226.206/pipeline/";',
+            APP_SOURCE,
+        )
+        self.assertIn("if (result.user) rememberAuthenticatedIdentity(result.user);", APP_SOURCE)
+        self.assertIn("globalThis.location.reload();", APP_SOURCE)
+
+    def test_disabled_buttons_only_show_wait_cursor_during_progress(self):
+        disabled_style = re.search(r"\.btn:disabled\s*\{(?P<body>.*?)\}", STYLE_SOURCE, re.DOTALL)
+        progress_style = re.search(
+            r"\.btn\.is-progress:disabled\s*\{(?P<body>.*?)\}",
+            STYLE_SOURCE,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(disabled_style)
+        self.assertIsNotNone(progress_style)
+        self.assertIn("cursor: not-allowed", disabled_style.group("body"))
+        self.assertIn("cursor: wait", progress_style.group("body"))
+
+    def test_canvas_object_list_has_search_and_sort_controls(self):
+        self.assertIn('id="objectSearchInput"', HTML_SOURCE)
+        self.assertIn('id="objectSortSelect"', HTML_SOURCE)
+        self.assertIn('id="objectSortDirectionBtn"', HTML_SOURCE)
+        self.assertIn('aria-label="캔버스 객체 검색 및 정렬"', HTML_SOURCE)
+        self.assertIn('value="name"', HTML_SOURCE)
+        self.assertIn('value="type"', HTML_SOURCE)
+        self.assertIn('value="kind"', HTML_SOURCE)
+        self.assertIn('value="id"', HTML_SOURCE)
+
+    def test_canvas_object_search_and_sort_apply_to_nodes_and_links(self):
+        self.assertIn("const objectListViewState =", APP_SOURCE)
+        self.assertIn('document.getElementById("objectSearchInput")?.addEventListener("input"', APP_SOURCE)
+        self.assertIn('document.getElementById("objectSortSelect")?.addEventListener("change"', APP_SOURCE)
+        self.assertIn('document.getElementById("objectSortDirectionBtn")?.addEventListener("click"', APP_SOURCE)
+        self.assertIn("...currentWorkflow.nodes.map", APP_SOURCE)
+        self.assertIn("...currentWorkflow.links.map", APP_SOURCE)
+        self.assertIn("검색 조건에 맞는 객체가 없습니다.", APP_SOURCE)
+
+    def test_canvas_object_controls_stay_on_one_row(self):
+        self.assertRegex(
+            STYLE_SOURCE,
+            r"\.object-list-controls\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+minmax\(104px,\s*0\.82fr\)",
         )
 
 

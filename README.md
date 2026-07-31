@@ -139,7 +139,7 @@ run_studio.bat --no-browser
 run_studio.bat --port 8877
 
 # Connect Marketplace/account requests to the hosted InfraX platform
-run_studio.bat --platform-api-base https://infrax.iptime.org/pipeline/api
+run_studio.bat --platform-api-base https://106.254.226.206/pipeline/api
 
 # Work locally without contacting the hosted platform
 run_studio.bat --offline
@@ -152,7 +152,7 @@ The packaged `tool-config.json` supplies the default hosted API:
 
 ```json
 {
-  "platformApiBase": "https://infrax.iptime.org/pipeline/api"
+  "platformApiBase": "https://106.254.226.206/pipeline/api"
 }
 ```
 
@@ -177,7 +177,7 @@ only this fixed allowlist to the configured HTTPS platform:
 - health, session, and Pipeline Tool release metadata/legacy redirects;
 - Marketplace workflow and module list/item reads and uploads;
 - Marketplace module ZIP downloads;
-- the local-connect PKCE exchange.
+- the local-connect PKCE exchange and local logout.
 
 Arbitrary upstream paths, query strings, methods, hosts, and request headers
 are rejected. The upstream connection has a five-second inactivity timeout
@@ -188,11 +188,26 @@ delete shared items from the hosted site instead.
 
 During `POST /api/local-connect/exchange`, the bridge forwards the one-time
 code, PKCE verifier, state, and exact loopback return origin. It keeps the
-returned `ixm_...` Marketplace token only in Python process memory and removes
-`accessToken` from the browser response. Subsequent allowlisted requests get
-the Authorization header inside the bridge. The token is cleared on
-authorization failure and when the process stops; it is never written to
-browser storage or disk.
+returned `ixm_...` access token only in Python process memory. The required
+`ixr_...` refresh credential is never returned to JavaScript. On Windows it is
+encrypted for the current user with DPAPI and stored below
+`%LOCALAPPDATA%\InfraX\PipelineTool`; platforms without an OS credential
+protector use memory-only credentials rather than a plaintext fallback.
+Subsequent allowlisted requests get the Authorization header inside the
+bridge. On the first 401 the bridge refreshes once and retries the request.
+`POST /api/local-connect/logout` asks the server to revoke the credential and
+then removes the local copy, even if the server is temporarily unavailable.
+No Marketplace credential is written to browser storage.
+
+The central server contract is:
+
+- exchange returns `accessToken`, `refreshToken`, `expiresAt`,
+  `refreshExpiresAt`, and `user`;
+- `POST /local-connect/refresh` accepts `{ "refreshToken": "ixr_..." }` and
+  returns a new access token, rotated refresh token, `expiresAt`,
+  `refreshExpiresAt`, and optional `user`;
+- `POST /local-connect/logout` accepts `{ "refreshToken": "ixr_..." }`,
+  invalidates the server-side session, and returns `{ "revoked": true }`.
 
 API-only mode retains the earlier remote-browser integration. In that mode the
 terminal prints a temporary pairing token, browser requests must come from an

@@ -185,6 +185,7 @@ class StudioBridgeTest(unittest.TestCase):
             catalog_timeout=5,
             run_timeout=5,
             studio_root=self.studio_root,
+            platform_credential_path=self.root / "marketplace-credentials.bin",
         )
         self.addCleanup(self.server.server_close)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -526,6 +527,7 @@ class StudioBridgeTest(unittest.TestCase):
         cookie = self.studio_cookie_header()
         exchange_document = {
             "accessToken": "ixm_" + ("t" * 43),
+            "refreshToken": "ixr_" + ("r" * 43),
             "tokenType": "Bearer",
             "expiresAt": "2026-07-30T12:00:00+00:00",
             "user": {
@@ -606,6 +608,84 @@ class StudioBridgeTest(unittest.TestCase):
             "Bearer " + exchange_document["accessToken"],
         )
         self.assertEqual(session_request.timeout, 5.0)
+
+    def test_platform_proxy_refreshes_once_and_logout_clears_credentials(self):
+        self.server.platform_api_base = "https://platform.example/pipeline/api"
+        self.server.set_platform_access_token("ixm_" + ("a" * 43))
+        self.server.set_platform_refresh_token("ixr_" + ("r" * 43))
+        cookie = self.studio_cookie_header()
+        refreshed_access = "ixm_" + ("b" * 43)
+        rotated_refresh = "ixr_" + ("s" * 43)
+        FakeHTTPSConnection.reset(
+            FakePlatformResponse(401, b'{"error":"expired"}'),
+            FakePlatformResponse(
+                200,
+                json.dumps(
+                    {
+                        "accessToken": refreshed_access,
+                        "refreshToken": rotated_refresh,
+                        "expiresAt": "2026-08-01T00:00:00Z",
+                        "refreshExpiresAt": "2027-08-01T00:00:00Z",
+                    }
+                ).encode("utf-8"),
+            ),
+            FakePlatformResponse(
+                200,
+                b'{"authMode":"required","user":{"id":"user-1","displayName":"Tester"}}',
+                {"Content-Type": "application/json"},
+            ),
+            FakePlatformResponse(200, b'{"revoked":true}'),
+        )
+        with mock.patch(
+            "studio_bridge.http.client.HTTPSConnection",
+            FakeHTTPSConnection,
+        ):
+            status, _, body = self.request(
+                "GET",
+                "/api/session",
+                authorize=False,
+                tool_context=None,
+                origin=self.base_url,
+                extra_headers={"Cookie": cookie},
+            )
+            self.assertEqual(status, 200)
+            self.assertEqual(body["user"]["id"], "user-1")
+            self.assertEqual(
+                self.server.get_platform_refresh_token(),
+                rotated_refresh,
+            )
+            status, _, body = self.request(
+                "POST",
+                "/api/local-connect/logout",
+                payload={},
+                authorize=False,
+                tool_context=None,
+                origin=self.base_url,
+                extra_headers={"Cookie": cookie},
+            )
+            self.assertEqual(status, 200)
+            self.assertFalse(body["connected"])
+
+        paths = [request.path for request in FakeHTTPSConnection.requests]
+        self.assertEqual(
+            paths,
+            [
+                "/pipeline/api/session",
+                "/pipeline/api/local-connect/refresh",
+                "/pipeline/api/session",
+                "/pipeline/api/local-connect/logout",
+            ],
+        )
+        self.assertEqual(
+            FakeHTTPSConnection.requests[2].headers["Authorization"],
+            "Bearer " + refreshed_access,
+        )
+        logout_body = json.loads(
+            bytes(FakeHTTPSConnection.requests[3].body).decode("utf-8")
+        )
+        self.assertEqual(logout_body, {"refreshToken": rotated_refresh})
+        self.assertIsNone(self.server.get_platform_access_token())
+        self.assertIsNone(self.server.get_platform_refresh_token())
 
     def test_platform_proxy_requires_api_cookie_and_rejects_non_allowlisted_routes(self):
         self.server.platform_api_base = "https://platform.example/pipeline/api"
@@ -808,7 +888,7 @@ class StudioBridgeTest(unittest.TestCase):
     def test_default_studio_origin_is_allowed(self):
         public_ip_origin = "https://106.254.226.206"
         self.assertIn(public_ip_origin, DEFAULT_ALLOWED_ORIGINS)
-        self.assertIn("https://infrax.iptime.org", DEFAULT_ALLOWED_ORIGINS)
+        self.assertNotIn("https://infrax.iptime.org", DEFAULT_ALLOWED_ORIGINS)
         self.assertNotIn("http://infrax.iptime.org:3004", DEFAULT_ALLOWED_ORIGINS)
         self.assertIn("http://127.0.0.1:5178", DEFAULT_ALLOWED_ORIGINS)
         self.assertIn("http://localhost:5178", DEFAULT_ALLOWED_ORIGINS)

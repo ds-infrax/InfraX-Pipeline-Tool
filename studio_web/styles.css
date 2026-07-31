@@ -352,9 +352,21 @@ h3 {
 }
 
 .btn:disabled {
-  cursor: wait;
+  cursor: not-allowed;
   opacity: 0.58;
   transform: none;
+}
+
+.btn.is-progress:disabled {
+  cursor: wait;
+}
+
+.btn.is-progress .material-symbols-outlined {
+  animation: button-progress-spin 0.9s linear infinite;
+}
+
+@keyframes button-progress-spin {
+  to { transform: rotate(360deg); }
 }
 
 .topbar-actions {
@@ -758,6 +770,71 @@ textarea:hover {
   max-height: 196px;
   overflow-y: auto;
   overscroll-behavior: contain;
+}
+
+.object-list-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(104px, 0.82fr);
+  gap: 6px;
+  align-items: center;
+  margin: 10px 0;
+}
+
+.object-search {
+  position: relative;
+  display: block;
+}
+
+.object-search .material-symbols-outlined {
+  position: absolute;
+  top: 50%;
+  left: 10px;
+  z-index: 1;
+  color: var(--muted);
+  font-size: 17px;
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
+.object-search input {
+  min-height: 34px;
+  padding-left: 34px;
+  background: rgba(255, 255, 255, 0.66);
+  font-size: 11px;
+}
+
+.object-sort-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 32px;
+  gap: 5px;
+}
+
+.object-sort-controls select,
+.object-sort-direction {
+  min-height: 32px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.66);
+}
+
+.object-sort-controls select {
+  padding: 0 9px;
+  font-size: 10px;
+}
+
+.object-sort-direction {
+  display: inline-grid;
+  place-items: center;
+  color: var(--primary);
+  box-shadow: inset 0 0 0 1px var(--ghost-outline);
+}
+
+.object-sort-direction:hover {
+  background: var(--surface-lowest);
+  box-shadow: inset 0 0 0 1px rgba(65, 104, 215, 0.24);
+}
+
+.object-sort-direction .material-symbols-outlined {
+  font-size: 17px;
 }
 
 .server-workflow-row {

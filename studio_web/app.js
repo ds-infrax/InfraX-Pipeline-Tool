@@ -149,6 +149,7 @@ const API_BASE_URL = LOCAL_STUDIO_MODE
 const PLATFORM_API_BASE_URL = configuredPlatformApiBase
   ? new URL(`${configuredPlatformApiBase.replace(/\/+$/, "")}/`, runtimeScriptUrl)
   : API_BASE_URL;
+const MARKETPLACE_SITE_URL = "https://106.254.226.206/pipeline/";
 const configuredLocalToolBase = document.documentElement.dataset.localToolBase?.trim();
 const LOCAL_TOOL_BASE_URL = new URL(
   configuredLocalToolBase || "http://127.0.0.1:8765/",
@@ -517,7 +518,7 @@ function getAccessToken() {
 }
 
 function restoreCachedAuthIdentity() {
-  if (!LOCAL_STUDIO_MODE || !getAccessToken()) return false;
+  if (!LOCAL_STUDIO_MODE) return false;
   try {
     const cached = JSON.parse(localStorage.getItem(AUTH_IDENTITY_CACHE_KEY) || "null");
     if (
@@ -841,6 +842,11 @@ async function loadAuthSession(options = {}) {
 
 let selectedNodeId = null;
 let selectedLinkId = null;
+const objectListViewState = {
+  query: "",
+  sortBy: "name",
+  descending: false,
+};
 let dragState = null;
 let pendingLinkPort = null;
 let pendingLinkReconnect = null;
@@ -1020,6 +1026,10 @@ function renderStudioContext() {
   const authorChip = document.getElementById("marketplaceAuthorChip");
   const authorStatus = document.getElementById("marketplaceAuthorStatus");
   const verified = Boolean(authState.user);
+  document.getElementById("logoutPlatformAccountBtn")?.classList.toggle(
+    "hidden",
+    !LOCAL_STUDIO_MODE || !verified
+  );
   const statusLabel = authState.status === "scope-change"
     ? "계정 변경 감지"
     : authState.status === "offline"
@@ -1051,8 +1061,37 @@ function renderStudioContext() {
     input.placeholder = verified ? "로그인 계정에서 자동 설정" : "작성자 이름 (미인증)";
   });
   const mayWriteServer = serverWritesEnabled();
+  const workflowMarketplaceButton = document.getElementById("registerWorkflowBtn");
+  if (workflowMarketplaceButton) {
+    const icon = workflowMarketplaceButton.querySelector(".material-symbols-outlined");
+    const label = workflowMarketplaceButton.querySelector(".button-label");
+    const isCheckingAccount = authState.status === "loading" || authState.status === "scope-change";
+    const connectTitle = authState.status === "offline"
+      ? "Marketplace 서버가 오프라인입니다. 클릭하여 계정 연결을 다시 시도합니다."
+      : authState.status === "error"
+        ? "Marketplace 계정 확인에 실패했습니다. 클릭하여 다시 연결합니다."
+        : "운영 Marketplace에서 로그인하고 이 로컬 Studio의 계정 연결을 승인합니다.";
+    workflowMarketplaceButton.disabled = isCheckingAccount;
+    workflowMarketplaceButton.classList.toggle("is-progress", isCheckingAccount);
+    workflowMarketplaceButton.setAttribute("aria-busy", String(isCheckingAccount));
+    if (icon) icon.textContent = isCheckingAccount
+      ? "progress_activity"
+      : mayWriteServer
+        ? "publish"
+        : "link";
+    if (label) label.textContent = isCheckingAccount
+      ? "Marketplace 계정 확인 중"
+      : mayWriteServer
+        ? "Marketplace 업로드"
+        : "Marketplace 계정 연결";
+    workflowMarketplaceButton.title = isCheckingAccount
+      ? "저장된 Marketplace 계정 정보를 확인하고 있습니다."
+      : mayWriteServer
+        ? "현재 워크플로우를 Marketplace에 등록하거나 업데이트합니다."
+        : connectTitle;
+  }
   const loginRequiredTitle = "로그인 후 Marketplace 등록을 사용할 수 있습니다.";
-  ["registerWorkflowBtn", "openModuleRegisterBtn"].forEach(id => {
+  ["openModuleRegisterBtn"].forEach(id => {
     const button = document.getElementById(id);
     if (!button) return;
     button.disabled = !mayWriteServer;
@@ -1417,7 +1456,52 @@ function renderProjectList() {
 function renderObjectList() {
   const root = document.getElementById("objectList");
   if (!root) return;
-  const nodeRows = currentWorkflow.nodes.map(node => {
+  const query = objectListViewState.query.trim().toLocaleLowerCase();
+  const items = [
+    ...currentWorkflow.nodes.map(node => ({
+      kind: "node",
+      id: node.id,
+      name: displayNodeTitle(node),
+      type: node.type,
+      searchText: `${displayNodeTitle(node)} ${node.type} ${node.id}`,
+      value: node,
+    })),
+    ...currentWorkflow.links.map(link => ({
+      kind: "link",
+      id: link[0],
+      name: describeLink(link),
+      type: link[5] || "",
+      searchText: `${describeLink(link)} ${link[5] || ""} ${link[0]}`,
+      value: link,
+    })),
+  ]
+    .filter(item => !query || item.searchText.toLocaleLowerCase().includes(query))
+    .sort((left, right) => {
+      const sortBy = objectListViewState.sortBy;
+      const leftValue = sortBy === "kind" ? left.kind : left[sortBy];
+      const rightValue = sortBy === "kind" ? right.kind : right[sortBy];
+      const result = sortBy === "id"
+        ? String(leftValue).localeCompare(String(rightValue), undefined, { numeric: true })
+        : String(leftValue).localeCompare(String(rightValue), undefined, {
+            numeric: true,
+            sensitivity: "base",
+          });
+      if (result !== 0) return objectListViewState.descending ? -result : result;
+      return String(left.id).localeCompare(String(right.id), undefined, { numeric: true });
+    });
+
+  root.innerHTML = items.map(item => {
+    if (item.kind === "link") {
+      const link = item.value;
+      return `
+        <button class="object-item ${link[0] === selectedLinkId ? "active" : ""}" type="button" onclick="selectLinkFromList(${inlineJson(link[0])})">
+          <span class="object-kind">Link</span>
+          <b>${escapeHtml(item.name)}</b>
+          <small>link #${link[0]}</small>
+        </button>
+      `;
+    }
+    const node = item.value;
     const missing = isNodeMissingFromCatalog(node);
     return `
       <button class="object-item ${node.id === selectedNodeId ? "active" : ""} ${missing ? "missing-node" : ""}" type="button" onclick="selectNodeFromList(${inlineJson(node.id)})">
@@ -1426,16 +1510,11 @@ function renderObjectList() {
         <small>${escapeHtml(node.type)} #${node.id}${missing ? " · catalog 미확인" : ""}</small>
       </button>
     `;
-  });
-  const linkRows = currentWorkflow.links.map(link => `
-    <button class="object-item ${link[0] === selectedLinkId ? "active" : ""}" type="button" onclick="selectLinkFromList(${inlineJson(link[0])})">
-      <span class="object-kind">Link</span>
-      <b>${escapeHtml(describeLink(link))}</b>
-      <small>link #${link[0]}</small>
-    </button>
-  `);
-  root.innerHTML = [...nodeRows, ...linkRows].join("")
-    || `<div class="kv"><span>아직 배치된 객체가 없습니다. Node 탭에서 노드를 추가하세요.</span></div>`;
+  }).join("") || `<div class="kv"><span>${
+    query
+      ? "검색 조건에 맞는 객체가 없습니다."
+      : "아직 배치된 객체가 없습니다. Node 탭에서 노드를 추가하세요."
+  }</span></div>`;
 }
 
 function selectNodeFromList(nodeId) {
@@ -1994,15 +2073,20 @@ function renderPipelineToolRelease() {
     description.textContent = `${hostedLocalConnectRequest.returnOrigin}에서 시작한 요청입니다. 직접 실행한 로컬 Tool이 맞을 때만 허용하세요.`;
     meta.innerHTML = "<span>Marketplace 업로드 전용</span><span>관리자 권한 제외</span><span>최대 8시간</span>";
     downloadButton.disabled = true;
-    downloadLabel.textContent = "연결 승인 대기";
+    downloadButton.classList.add("hidden");
+    downloadLabel.textContent = "승인 버튼을 눌러주세요";
     if (connectButton) {
-      connectButton.classList.remove("hidden");
+      connectButton.classList.remove("hidden", "light");
+      connectButton.classList.add("primary");
       connectButton.disabled = false;
-      connectButton.innerHTML = '<span class="material-symbols-outlined">verified_user</span>이 PC의 로컬 Tool 연결 허용';
+      connectButton.innerHTML = '<span class="material-symbols-outlined">verified_user</span>연결 승인';
     }
     return;
   }
+  downloadButton.classList.remove("hidden");
   if (connectButton) {
+    connectButton.classList.remove("primary");
+    connectButton.classList.add("light");
     connectButton.disabled = false;
     connectButton.innerHTML = '<span class="material-symbols-outlined">link</span>서버 계정 연결';
   }
@@ -2135,10 +2219,22 @@ function downloadLatestPipelineTool() {
 
 function platformSiteUrl() {
   try {
-    return new URL("../", PLATFORM_API_BASE_URL);
+    return new URL(MARKETPLACE_SITE_URL);
   } catch {
     return null;
   }
+}
+
+function openHostedMarketplace() {
+  const siteUrl = platformSiteUrl();
+  if (!siteUrl || siteUrl.protocol !== "https:") {
+    showToast("열 수 있는 HTTPS Marketplace 사이트 주소가 설정되지 않았습니다.");
+    return false;
+  }
+  const popup = window.open(siteUrl.toString(), "_blank", "noopener,noreferrer");
+  if (popup) popup.opener = null;
+  else showToast("브라우저에서 새 탭 열기를 허용해 주세요.");
+  return Boolean(popup);
 }
 
 function isLoopbackOrigin(value) {
@@ -2318,12 +2414,50 @@ async function consumeLocalConnectCode() {
     // The loopback bridge captures the delegated token in process memory and
     // removes it from the browser response. Never persist it in web storage.
     localStorage.removeItem(ACCESS_TOKEN_STORAGE_KEY);
-    localStorage.removeItem(AUTH_IDENTITY_CACHE_KEY);
+    if (result.user) rememberAuthenticatedIdentity(result.user);
     showToast("Marketplace 서버 계정을 로컬 Tool에 연결했습니다.");
+    // Restart once so account-scoped local storage is selected before the
+    // editor restores its draft. The bridge keeps the delegated credential.
+    globalThis.location.reload();
     return true;
   } catch (error) {
     showToast(`Marketplace 계정 연결 실패: ${error.message || "서버 연결 오류"} · 로컬 기능은 계속 사용할 수 있습니다.`);
     return false;
+  }
+}
+
+async function logoutPlatformAccount() {
+  if (!LOCAL_STUDIO_MODE || !authState.user) return false;
+  const button = document.getElementById("logoutPlatformAccountBtn");
+  if (button) button.disabled = true;
+  try {
+    const response = await apiFetch("/local-connect/logout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+      authentication: "omit",
+      timeoutMs: PLATFORM_REQUEST_TIMEOUT_MS,
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(responseErrorMessage(response, result));
+    authGeneration += 1;
+    authIdentityEpoch += 1;
+    Object.assign(authState, {
+      status: "anonymous",
+      mode: "required",
+      user: null,
+    });
+    localStorage.removeItem(ACCESS_TOKEN_STORAGE_KEY);
+    localStorage.removeItem(AUTH_IDENTITY_CACHE_KEY);
+    establishStorageScope(authState);
+    renderStudioContext();
+    showToast("Marketplace 계정에서 로그아웃했습니다.");
+    return true;
+  } catch (error) {
+    showToast(`로그아웃 실패: ${error.message || "서버 연결 오류"}`);
+    return false;
+  } finally {
+    if (button) button.disabled = false;
   }
 }
 
@@ -5739,10 +5873,11 @@ function exportWorkflowForDownload() {
 
 document.getElementById("undoBtn").addEventListener("click", undo);
 document.getElementById("redoBtn").addEventListener("click", redo);
-document.getElementById("marketplaceBtn").addEventListener("click", openMarketplaceView);
+document.getElementById("marketplaceBtn").addEventListener("click", openHostedMarketplace);
 document.getElementById("closeMarketplaceBtn").addEventListener("click", closeMarketplaceView);
 document.getElementById("downloadPipelineToolBtn")?.addEventListener("click", downloadLatestPipelineTool);
 document.getElementById("connectPlatformAccountBtn")?.addEventListener("click", handlePlatformAccountConnect);
+document.getElementById("logoutPlatformAccountBtn")?.addEventListener("click", logoutPlatformAccount);
 document.getElementById("saveWorkflowBtn")?.addEventListener("click", saveWorkflowToServer);
 document.getElementById("runWorkflowBtn")?.addEventListener("click", runLocalWorkflow);
 document.getElementById("closeRunOutputBtn")?.addEventListener("click", () => {
@@ -5750,7 +5885,13 @@ document.getElementById("closeRunOutputBtn")?.addEventListener("click", () => {
 });
 document.getElementById("pairLocalToolBtn")?.addEventListener("click", pairLocalTool);
 document.getElementById("saveLocalToolRootBtn")?.addEventListener("click", saveLocalToolRoot);
-document.getElementById("registerWorkflowBtn")?.addEventListener("click", () => openWorkflowRegisterModal());
+document.getElementById("registerWorkflowBtn")?.addEventListener("click", () => {
+  if (serverWritesEnabled()) {
+    openWorkflowRegisterModal();
+    return;
+  }
+  void openPlatformAccountConnect();
+});
 document.getElementById("workflowRegisterForm")?.addEventListener("submit", registerWorkflowPackage);
 document.getElementById("closeWorkflowRegisterBtn")?.addEventListener("click", closeWorkflowRegisterModal);
 document.getElementById("cancelWorkflowRegisterBtn")?.addEventListener("click", closeWorkflowRegisterModal);
@@ -6107,6 +6248,28 @@ jsonInput.addEventListener("change", () => {
 });
 
 openSidebarSection("workflowSection");
+
+document.getElementById("objectSearchInput")?.addEventListener("input", event => {
+  objectListViewState.query = event.target.value;
+  renderObjectList();
+});
+
+document.getElementById("objectSortSelect")?.addEventListener("change", event => {
+  objectListViewState.sortBy = event.target.value;
+  renderObjectList();
+});
+
+document.getElementById("objectSortDirectionBtn")?.addEventListener("click", event => {
+  objectListViewState.descending = !objectListViewState.descending;
+  const button = event.currentTarget;
+  const label = objectListViewState.descending ? "정렬 방향: 내림차순" : "정렬 방향: 오름차순";
+  button.setAttribute("aria-label", label);
+  button.setAttribute("aria-pressed", String(objectListViewState.descending));
+  button.title = objectListViewState.descending ? "내림차순" : "오름차순";
+  button.querySelector(".material-symbols-outlined").textContent =
+    objectListViewState.descending ? "arrow_downward" : "arrow_upward";
+  renderObjectList();
+});
 
 async function refreshAuthenticatedData(options = {}) {
   const ready = await loadAuthSession({
