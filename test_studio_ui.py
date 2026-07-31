@@ -123,5 +123,36 @@ class StudioPanelCollapseTest(unittest.TestCase):
         )
 
 
+class StudioSidebarNavigationTest(unittest.TestCase):
+    def test_workflow_save_steps_are_removed(self):
+        self.assertNotIn("persistence-guide", HTML_SOURCE)
+        self.assertNotIn("브라우저 자동", HTML_SOURCE)
+        self.assertNotIn("폴더 저장", HTML_SOURCE)
+        self.assertNotIn("마켓 공유", HTML_SOURCE)
+
+    def test_local_workflow_files_have_a_separate_sidebar_tab(self):
+        self.assertIn('data-target="localFilesSection"', HTML_SOURCE)
+        self.assertIn('id="localFilesSection"', HTML_SOURCE)
+        self.assertIn('title="로컬 워크플로우 파일"', HTML_SOURCE)
+
+        workflow_start = HTML_SOURCE.index('id="workflowSection"')
+        workflow_end = HTML_SOURCE.index('id="localFilesSection"')
+        workflow_markup = HTML_SOURCE[workflow_start:workflow_end]
+        self.assertNotIn('id="serverWorkflowList"', workflow_markup)
+
+        local_files_start = workflow_end
+        local_files_end = HTML_SOURCE.index('id="paletteSection"')
+        local_files_markup = HTML_SOURCE[local_files_start:local_files_end]
+        self.assertIn('id="refreshServerWorkflowsBtn"', local_files_markup)
+        self.assertIn('id="serverWorkflowList"', local_files_markup)
+
+    def test_marketplace_entry_is_preserved(self):
+        self.assertIn('id="marketplaceBtn"', HTML_SOURCE)
+        self.assertIn(
+            'document.getElementById("marketplaceBtn").addEventListener("click", openMarketplaceView);',
+            APP_SOURCE,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

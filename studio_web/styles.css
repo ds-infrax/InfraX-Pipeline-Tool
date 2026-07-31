@@ -739,55 +739,6 @@ textarea:hover {
   margin: 10px -4px 8px;
 }
 
-.persistence-guide {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 5px;
-  padding: 0;
-  margin: 12px 0 8px;
-  list-style: none;
-}
-
-.persistence-guide li {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 5px;
-  padding: 7px 6px;
-  border-radius: 9px;
-  background: var(--surface-mid);
-  color: var(--on-surface-variant);
-}
-
-.persistence-guide li b {
-  display: grid;
-  width: 17px;
-  height: 17px;
-  flex: 0 0 auto;
-  place-items: center;
-  border-radius: 6px;
-  background: var(--surface-highest);
-  font-size: 8px;
-  font-weight: 900;
-}
-
-.persistence-guide li span {
-  overflow: hidden;
-  font-size: 8px;
-  font-weight: 760;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.persistence-guide li.active {
-  background: rgba(65, 104, 215, 0.19);
-  color: var(--on-primary);
-}
-
-.persistence-guide li.active b {
-  background: var(--primary-container);
-}
-
 .subsection-heading {
   align-items: flex-end;
   margin-top: 24px;

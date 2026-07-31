@@ -63,6 +63,10 @@
             <span class="material-symbols-outlined">deployed_code</span>
             <span>노드</span>
           </button>
+          <button class="rail-button icon-tab" type="button" data-target="localFilesSection" title="로컬 워크플로우 파일">
+            <span class="material-symbols-outlined">folder_open</span>
+            <span>파일</span>
+          </button>
           <button class="rail-button" id="marketplaceBtn" type="button" title="마켓플레이스">
             <span class="material-symbols-outlined">storefront</span>
             <span>마켓</span>
@@ -122,11 +126,6 @@
                 <span class="material-symbols-outlined">add</span>
               </button>
             </div>
-            <ol class="persistence-guide" aria-label="워크플로우 저장 3단계">
-              <li class="active"><b>1</b><span>브라우저 자동</span></li>
-              <li><b>2</b><span>폴더 저장</span></li>
-              <li><b>3</b><span>마켓 공유</span></li>
-            </ol>
             <div class="section-inline-actions">
               <button class="text-action" id="cloneWorkflowBtn" type="button">
                 <span class="material-symbols-outlined">content_copy</span> 복제
@@ -134,20 +133,6 @@
               <button class="text-action" id="toggleWorkflowListBtn" type="button">현재만</button>
             </div>
             <div class="nav-list" id="workflowList"></div>
-
-            <div class="subsection-heading server-heading">
-              <div>
-                <span class="eyebrow">WORKFLOWS FOLDER</span>
-                <h3>로컬 파일</h3>
-              </div>
-              <button class="icon-button compact" id="refreshServerWorkflowsBtn" type="button" title="workflows 폴더 새로고침" aria-label="workflows 폴더 새로고침">
-                <span class="material-symbols-outlined">refresh</span>
-              </button>
-            </div>
-            <p class="section-description server-description"><code>workflows</code> 폴더의 JSON 파일입니다. 파일을 열면 현재 브라우저 초안이 해당 파일로 교체됩니다.</p>
-            <div class="nav-list server-workflow-list" id="serverWorkflowList" aria-live="polite">
-              <div class="kv"><span>로컬 워크플로우 파일을 조회하는 중입니다.</span></div>
-            </div>
 
             <div class="subsection-heading">
               <div>
@@ -157,6 +142,22 @@
               <span class="microcopy">이름 우선 · 타입 보조</span>
             </div>
             <div class="object-list" id="objectList"></div>
+          </section>
+
+          <section class="section sidebar-hidden" id="localFilesSection">
+            <div class="section-heading">
+              <div>
+                <span class="eyebrow">WORKFLOWS FOLDER</span>
+                <h2>로컬 파일</h2>
+              </div>
+              <button class="icon-button compact" id="refreshServerWorkflowsBtn" type="button" title="workflows 폴더 새로고침" aria-label="workflows 폴더 새로고침">
+                <span class="material-symbols-outlined">refresh</span>
+              </button>
+            </div>
+            <p class="section-description server-description"><code>workflows</code> 폴더에 저장된 워크플로우 JSON 파일입니다. 파일을 선택하면 현재 편집 화면에서 열립니다.</p>
+            <div class="nav-list server-workflow-list" id="serverWorkflowList" aria-live="polite">
+              <div class="kv"><span>로컬 워크플로우 파일을 조회하는 중입니다.</span></div>
+            </div>
           </section>
 
           <section class="section sidebar-hidden" id="paletteSection">
