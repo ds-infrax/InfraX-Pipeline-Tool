@@ -156,12 +156,13 @@ class StudioSidebarNavigationTest(unittest.TestCase):
         )
         self.assertIn('window.open(siteUrl.toString(), "_blank", "noopener,noreferrer")', APP_SOURCE)
 
-    def test_workflow_marketplace_button_connects_before_upload(self):
-        self.assertIn('class="button-label">Marketplace 계정 연결</span>', HTML_SOURCE)
+    def test_workflow_marketplace_button_shows_account_status(self):
+        self.assertIn('class="button-label">Marketplace 연결 정보</span>', HTML_SOURCE)
         self.assertIn('workflowMarketplaceButton.classList.toggle("is-progress", isCheckingAccount)', APP_SOURCE)
         self.assertIn('"Marketplace 계정 확인 중"', APP_SOURCE)
-        self.assertIn('"Marketplace 업로드"', APP_SOURCE)
+        self.assertIn('"verified_user"', APP_SOURCE)
         self.assertIn('"Marketplace 계정 연결"', APP_SOURCE)
+        self.assertIn("Marketplace 연결됨:", APP_SOURCE)
         self.assertIn("if (serverWritesEnabled())", APP_SOURCE)
         self.assertIn("void openPlatformAccountConnect();", APP_SOURCE)
         self.assertIn(

@@ -649,12 +649,13 @@ function establishStorageScope(nextAuthState = authState) {
   return true;
 }
 
-function lockForStorageScopeChange(previousAuthState) {
+function lockForStorageScopeChange(previousAuthState, nextAuthState = previousAuthState) {
   const draftSaved = !hasAnyDirtyWorkflow()
     || persistLocalDraft({ immediate: true, silent: true });
-  Object.assign(authState, previousAuthState, { status: "scope-change" });
+  activeStorageScope = storageScopeForAuth(nextAuthState);
+  Object.assign(authState, nextAuthState);
   authIdentityEpoch += 1;
-  storageScopeTransitionPending = true;
+  storageScopeTransitionPending = false;
   if (!draftSaved) externalDraftConflict = true;
   registeredMarketplacePackages = registeredMarketplacePackages.map(item => ({
     ...item,
@@ -663,9 +664,8 @@ function lockForStorageScopeChange(previousAuthState) {
   renderStudioContext();
   renderServerWorkflowList();
   renderMarketplace();
-  setSaveState("error", "로그인 계정 변경 감지 · JSON 내보내기 후 새로고침 필요");
-  showToast("로그인 계정 변경을 감지해 Marketplace 권한을 다시 확인합니다. 브라우저 초안은 유지됩니다.");
-  window.location.reload();
+  applyCurrentWorkflowSaveState();
+  showToast("Marketplace 계정 상태가 바뀌었습니다. 로컬 편집은 유지하고 계정 정보만 다시 반영했습니다.");
 }
 
 function scheduleAuthRevalidation() {
@@ -789,8 +789,9 @@ async function loadAuthSession(options = {}) {
       status: result.user ? "authenticated" : "anonymous",
     };
     if (nextAuthState.user) rememberAuthenticatedIdentity(nextAuthState.user);
+    else if (LOCAL_STUDIO_MODE && nextAuthState.mode !== "disabled") clearLocalMarketplaceSession();
     if (!establishStorageScope(nextAuthState)) {
-      lockForStorageScopeChange(previousAuthState);
+      lockForStorageScopeChange(previousAuthState, nextAuthState);
       return false;
     }
     Object.assign(authState, nextAuthState);
@@ -822,7 +823,7 @@ async function loadAuthSession(options = {}) {
       return false;
     }
     if (!establishStorageScope(nextAuthState)) {
-      lockForStorageScopeChange(previousAuthState);
+      lockForStorageScopeChange(previousAuthState, nextAuthState);
       return false;
     }
     Object.assign(authState, nextAuthState);
@@ -850,6 +851,7 @@ const objectListViewState = {
 let dragState = null;
 let pendingLinkPort = null;
 let pendingLinkReconnect = null;
+let assetSidebarTab = "workflow";
 let lastRegisteredScriptId = null;
 const DEFAULT_NODE_TYPES = ["InputInt", "Add", "OutputPrint"];
 let nodeTypes = [...DEFAULT_NODE_TYPES];
@@ -1077,17 +1079,17 @@ function renderStudioContext() {
     if (icon) icon.textContent = isCheckingAccount
       ? "progress_activity"
       : mayWriteServer
-        ? "publish"
+        ? "verified_user"
         : "link";
     if (label) label.textContent = isCheckingAccount
       ? "Marketplace 계정 확인 중"
       : mayWriteServer
-        ? "Marketplace 업로드"
+        ? `${authState.user?.displayName || "Marketplace"} 연결됨`
         : "Marketplace 계정 연결";
     workflowMarketplaceButton.title = isCheckingAccount
       ? "저장된 Marketplace 계정 정보를 확인하고 있습니다."
       : mayWriteServer
-        ? "현재 워크플로우를 Marketplace에 등록하거나 업데이트합니다."
+        ? `Marketplace 연결 계정: ${authState.user?.displayName || ""}${authState.user?.email ? ` · ${authState.user.email}` : ""}${authState.user?.role ? ` · ${authState.user.role}` : ""}`
         : connectTitle;
   }
   const loginRequiredTitle = "로그인 후 Marketplace 등록을 사용할 수 있습니다.";
@@ -1276,6 +1278,46 @@ function marketplacePackageForNode(node) {
     || null;
 }
 
+function marketplacePackageForNodeType(nodeType) {
+  const type = String(nodeType || "");
+  if (!type) return null;
+  return [...registeredMarketplacePackages, ...marketplacePackages]
+    .filter(pkg => !pkg.workflow && pkg.kind !== "workflow-bundle")
+    .find(pkg => marketplaceNodeTypes(pkg).includes(type)) || null;
+}
+
+function marketplaceWorkflowPackages() {
+  return [...registeredMarketplacePackages, ...marketplacePackages]
+    .filter(pkg => pkg.workflow || pkg.kind === "workflow-bundle");
+}
+
+function normalizeComparableName(value) {
+  return safeId(String(value || "").replace(/\.json$/i, "")).toLowerCase();
+}
+
+function marketplacePackageForWorkflowFile(fileName) {
+  const workflowName = String(fileName || "").replace(/\.json$/i, "");
+  const candidates = new Set([
+    normalizeComparableName(workflowName),
+    normalizeComparableName(`${workflowName}_current`),
+    normalizeComparableName(fileName),
+  ].filter(Boolean));
+  return marketplaceWorkflowPackages().find(pkg => {
+    const pkgCandidates = [
+      pkg.id,
+      pkg.name,
+      pkg.workflow?.name,
+      pkg.sourceWorkflowId,
+    ].map(normalizeComparableName).filter(Boolean);
+    return pkgCandidates.some(value => candidates.has(value));
+  }) || null;
+}
+
+function marketplaceActionButton(label, action, extraClass = "") {
+  if (!serverWritesEnabled()) return "";
+  return `<button class="market-mini-action ${extraClass}" type="button" onclick="event.stopPropagation(); ${action}">${escapeHtml(label)}</button>`;
+}
+
 function openMarketplaceForMissingNode(nodeId) {
   const node = currentWorkflow.nodes.find(item => item.id === nodeId);
   if (!node) return;
@@ -1397,6 +1439,7 @@ function renderServerWorkflowList() {
   root.innerHTML = "";
   serverWorkflowItems.forEach(item => {
     const fileName = item.fileName || item.name || String(item);
+    const pkg = marketplacePackageForWorkflowFile(fileName);
     const savedAt = item.modifiedAt ? new Date(item.modifiedAt) : null;
     const savedLabel = savedAt && !Number.isNaN(savedAt.getTime())
       ? savedAt.toLocaleString("ko-KR", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })
@@ -1407,7 +1450,23 @@ function renderServerWorkflowList() {
     openButton.innerHTML = `<b>${escapeHtml(fileName.replace(/\.json$/i, ""))}</b><span>${escapeHtml(fileName)} · ${escapeHtml(savedLabel)}</span>`;
     openButton.title = "이 파일을 현재 브라우저 초안으로 열기";
     openButton.addEventListener("click", () => loadServerWorkflow(fileName));
-    root.appendChild(openButton);
+    if (serverWritesEnabled()) {
+      const row = document.createElement("div");
+      row.className = "asset-market-row";
+      const actionButton = document.createElement("button");
+      actionButton.type = "button";
+      actionButton.className = `market-mini-action ${pkg ? "" : "new"} ${pkg && !pkg.canManage ? "readonly" : ""}`;
+      actionButton.textContent = pkg ? (pkg.canManage ? "수정" : "등록됨") : "등록";
+      actionButton.addEventListener("click", event => {
+        event.stopPropagation();
+        openWorkflowFileMarketplaceAction(fileName);
+      });
+      row.appendChild(openButton);
+      row.appendChild(actionButton);
+      root.appendChild(row);
+    } else {
+      root.appendChild(openButton);
+    }
   });
 }
 
@@ -1557,7 +1616,19 @@ function renderNodePalette() {
     const el = document.createElement("div");
     el.className = "nav-item palette-item";
     el.draggable = true;
-    el.innerHTML = `<b>${escapeHtml(script.name || script.type)}</b><span>${escapeHtml(script.type)} · ${script.outputs?.length || 0} outputs</span>`;
+    const pkg = marketplacePackageForNodeType(script.type);
+    const action = !serverWritesEnabled()
+      ? ""
+      : pkg
+        ? marketplaceActionButton(pkg.canManage ? "수정" : "등록됨", `openNodeTypeMarketplaceAction(${inlineJson(script.type)})`, pkg.canManage ? "" : "readonly")
+        : marketplaceActionButton("등록", `openNodeTypeMarketplaceAction(${inlineJson(script.type)})`, "new");
+    el.innerHTML = `
+      <div class="asset-card-row">
+        <b>${escapeHtml(script.name || script.type)}</b>
+        ${action}
+      </div>
+      <span>${escapeHtml(script.type)} · ${script.outputs?.length || 0} outputs</span>
+    `;
     el.addEventListener("click", () => addNode(script.type));
     el.addEventListener("dragstart", event => event.dataTransfer.setData("text/plain", script.type));
     root.appendChild(el);
@@ -2756,6 +2827,64 @@ function editRegisteredWorkflow(packageId) {
   openWorkflowRegisterModal(pkg);
 }
 
+async function openWorkflowFileMarketplaceAction(fileName) {
+  if (!requireServerWriteAccess()) return;
+  const pkg = marketplacePackageForWorkflowFile(fileName);
+  if (fileName && fileName !== currentWorkflowFileName) {
+    const loaded = await loadServerWorkflow(fileName);
+    if (!loaded) return;
+  }
+  if (pkg?.canManage) {
+    editRegisteredWorkflow(pkg.id);
+    return;
+  }
+  if (pkg) {
+    marketplaceTab = "workspace";
+    openMarketplaceView();
+    showToast("이미 Marketplace에 등록된 워크플로우입니다. 수정 권한은 작성자 또는 관리자에게만 있습니다.");
+    return;
+  }
+  openWorkflowRegisterModal();
+}
+
+function prepareNodeTypeMarketplaceRegistration(nodeType) {
+  if (!requireServerWriteAccess()) return;
+  const script = scriptLibrary.find(item => item.type === nodeType);
+  marketplaceTab = "module";
+  marketplaceFocusNodeType = nodeType;
+  moduleRegisterOpen = true;
+  openMarketplaceView();
+  resetMarketplaceRegisterForm();
+  const form = document.getElementById("marketplaceRegisterForm");
+  if (!form) return;
+  form.elements.name.value = script?.name || nodeType;
+  form.elements.description.value = script
+    ? `${script.name || script.type} 노드를 제공하는 로컬 Pipeline Tool 항목입니다.`
+    : `${nodeType} 노드를 제공하는 로컬 Pipeline Tool 항목입니다.`;
+  if (form.elements.kind) form.elements.kind.value = "node-pack";
+  if (form.elements.nodeTypes) form.elements.nodeTypes.value = nodeType;
+  if (form.elements.author) form.elements.author.value = authState.user?.displayName || localAuthorProfile || "";
+  syncMarketplaceSourceFields();
+  renderMarketplace();
+  requestAnimationFrame(() => document.getElementById("marketplacePackageName")?.focus());
+}
+
+function openNodeTypeMarketplaceAction(nodeType) {
+  const pkg = marketplacePackageForNodeType(nodeType);
+  if (pkg?.canManage) {
+    editRegisteredPackage(pkg.id);
+    return;
+  }
+  if (pkg) {
+    marketplaceTab = "module";
+    marketplaceFocusNodeType = nodeType;
+    openMarketplaceView();
+    showToast("이미 Marketplace에 등록된 노드입니다. 수정 권한은 작성자 또는 관리자에게만 있습니다.");
+    return;
+  }
+  prepareNodeTypeMarketplaceRegistration(nodeType);
+}
+
 window.downloadMarketplacePackage = downloadMarketplacePackage;
 window.addRegisteredWorkflowToEditor = addRegisteredWorkflowToEditor;
 window.downloadRegisteredWorkflow = downloadRegisteredWorkflow;
@@ -2763,6 +2892,8 @@ window.deleteRegisteredWorkflow = deleteRegisteredWorkflow;
 window.deleteRegisteredPackage = deleteRegisteredPackage;
 window.editRegisteredPackage = editRegisteredPackage;
 window.editRegisteredWorkflow = editRegisteredWorkflow;
+window.openWorkflowFileMarketplaceAction = openWorkflowFileMarketplaceAction;
+window.openNodeTypeMarketplaceAction = openNodeTypeMarketplaceAction;
 
 function syncMarketplaceSourceFields() {
   const sourceType = document.querySelector('input[name="sourceType"]:checked')?.value || "git";
@@ -5091,10 +5222,71 @@ function addScriptFromModal() {
 
 window.addScriptFromModal = addScriptFromModal;
 
+function setupAssetSidebar() {
+  const sideContent = document.querySelector(".side-content");
+  const localFilesSection = document.getElementById("localFilesSection");
+  const paletteSection = document.getElementById("paletteSection");
+  if (!sideContent || !localFilesSection || !paletteSection || document.getElementById("assetSection")) return;
+
+  const assetSection = document.createElement("section");
+  assetSection.className = "section sidebar-hidden";
+  assetSection.id = "assetSection";
+  assetSection.innerHTML = `
+    <div class="section-heading">
+      <div>
+        <span class="eyebrow">LOCAL ASSETS</span>
+        <h2>자산</h2>
+      </div>
+    </div>
+    <div class="sidebar-tabs" role="tablist" aria-label="자산 목록">
+      <button class="sidebar-tab active" type="button" data-asset-tab="workflow" role="tab" aria-selected="true">워크플로우</button>
+      <button class="sidebar-tab" type="button" data-asset-tab="node" role="tab" aria-selected="false">노드</button>
+    </div>
+    <div class="asset-pane-stack"></div>
+  `;
+  sideContent.insertBefore(assetSection, localFilesSection);
+  const stack = assetSection.querySelector(".asset-pane-stack");
+
+  [localFilesSection, paletteSection].forEach(section => {
+    section.classList.remove("section", "sidebar-hidden");
+    section.classList.add("asset-pane");
+    stack.appendChild(section);
+  });
+  localFilesSection.dataset.assetPane = "workflow";
+  paletteSection.dataset.assetPane = "node";
+
+  assetSection.querySelectorAll("[data-asset-tab]").forEach(button => {
+    button.addEventListener("click", () => setAssetSidebarTab(button.dataset.assetTab));
+  });
+  setAssetSidebarTab(assetSidebarTab, { scroll: false });
+}
+
+function setAssetSidebarTab(tab, options = {}) {
+  assetSidebarTab = tab === "node" ? "node" : "workflow";
+  document.querySelectorAll("[data-asset-tab]").forEach(button => {
+    const active = button.dataset.assetTab === assetSidebarTab;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", String(active));
+  });
+  document.querySelectorAll("[data-asset-pane]").forEach(pane => {
+    pane.classList.toggle("hidden", pane.dataset.assetPane !== assetSidebarTab);
+  });
+  if (options.scroll !== false) {
+    document.querySelector(".side-content")?.scrollTo({ top: 0, behavior: "smooth" });
+  }
+}
+
 function openSidebarSection(sectionId) {
+  if (sectionId === "localFilesSection") {
+    setAssetSidebarTab("workflow", { scroll: false });
+    sectionId = "assetSection";
+  } else if (sectionId === "paletteSection") {
+    setAssetSidebarTab("node", { scroll: false });
+    sectionId = "assetSection";
+  }
   const section = document.getElementById(sectionId);
   if (!section) return;
-  document.querySelectorAll(".side-content .section").forEach(item => {
+  document.querySelectorAll(".side-content > .section").forEach(item => {
     item.classList.toggle("sidebar-hidden", item.id !== sectionId);
   });
   section.classList.remove("collapsed");
@@ -5887,7 +6079,8 @@ document.getElementById("pairLocalToolBtn")?.addEventListener("click", pairLocal
 document.getElementById("saveLocalToolRootBtn")?.addEventListener("click", saveLocalToolRoot);
 document.getElementById("registerWorkflowBtn")?.addEventListener("click", () => {
   if (serverWritesEnabled()) {
-    openWorkflowRegisterModal();
+    const user = authState.user;
+    showToast(`Marketplace 연결됨: ${user?.displayName || "계정"}${user?.role ? ` · ${user.role}` : ""}`);
     return;
   }
   void openPlatformAccountConnect();
@@ -6247,6 +6440,7 @@ jsonInput.addEventListener("change", () => {
   }
 });
 
+setupAssetSidebar();
 openSidebarSection("workflowSection");
 
 document.getElementById("objectSearchInput")?.addEventListener("input", event => {
