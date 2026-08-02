@@ -1,6 +1,6 @@
 from typing import Any
 
-from workflow.node import Node
+from app.node import Node
 
 
 class NumberInput(Node):

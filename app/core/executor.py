@@ -1,7 +1,7 @@
-from workflow.core.input import resolve_input_value
-from workflow.core.loader import load_node
-from workflow.core.protocol import parse_workflow, validate_workflow
-from workflow.core.schema import run_input_types, validate_run_return
+from app.core.input import resolve_input_value
+from app.core.loader import load_node
+from app.core.protocol import parse_workflow, validate_workflow
+from app.core.schema import run_input_types, validate_run_return
 
 
 def execute_workflow(data, node_modules=None):

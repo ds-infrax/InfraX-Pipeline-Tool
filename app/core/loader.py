@@ -1,9 +1,9 @@
 import importlib
 import inspect
 
-from workflow.core.config import NODE_MODULES
-from workflow.core.schema import init_input_types, materialize_value
-from workflow.node import Node
+from app.core.config import NODE_MODULES
+from app.core.schema import init_input_types, materialize_value
+from app.node import Node
 
 
 def load_node(node_type, *args, node_modules=None, **kwargs):

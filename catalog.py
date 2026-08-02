@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from workflow.runner import build_project_catalog
+from app.runner import build_project_catalog
 
 
 if __name__ == "__main__":

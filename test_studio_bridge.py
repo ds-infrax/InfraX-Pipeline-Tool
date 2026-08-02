@@ -108,8 +108,8 @@ class StudioBridgeTest(unittest.TestCase):
         self.addCleanup(self.temporary_directory.cleanup)
         self.root = Path(self.temporary_directory.name)
         (self.root / "workflows").mkdir()
-        (self.root / "workflow").mkdir()
-        (self.root / "workflow" / "__init__.py").write_text("", encoding="utf-8")
+        (self.root / "app").mkdir()
+        (self.root / "app" / "__init__.py").write_text("", encoding="utf-8")
         (self.root / "catalog.py").write_text(
             "\n".join(
                 [
@@ -1167,8 +1167,8 @@ class StudioBridgeTest(unittest.TestCase):
 
             with tempfile.TemporaryDirectory() as fresh_directory:
                 fresh_root = Path(fresh_directory)
-                (fresh_root / "workflow").mkdir()
-                (fresh_root / "workflow" / "__init__.py").write_text(
+                (fresh_root / "app").mkdir()
+                (fresh_root / "app" / "__init__.py").write_text(
                     "",
                     encoding="utf-8",
                 )
@@ -1618,8 +1618,8 @@ class StudioBridgeTest(unittest.TestCase):
 
         alternate_root = self.root / "alternate-tool"
         alternate_root.mkdir()
-        (alternate_root / "workflow").mkdir()
-        (alternate_root / "workflow" / "__init__.py").write_text("", encoding="utf-8")
+        (alternate_root / "app").mkdir()
+        (alternate_root / "app" / "__init__.py").write_text("", encoding="utf-8")
         for filename in ("catalog.py", "main.py"):
             (alternate_root / filename).write_text(
                 (self.root / filename).read_text(encoding="utf-8"),
@@ -1704,8 +1704,8 @@ class StudioBridgeTest(unittest.TestCase):
             tool_context=context_id,
         )
         self.assertEqual(status, 200)
-        self.assertTrue((alternate_root / "workflows" / "alternate.json").is_file())
-        self.assertFalse((self.root / "workflows" / "alternate.json").exists())
+        self.assertTrue((alternate_root / "workflows" / "list" / "alternate.json").is_file())
+        self.assertFalse((self.root / "workflows" / "list" / "alternate.json").exists())
 
         status, _, body = self.request(
             "POST",
@@ -1742,8 +1742,8 @@ class StudioBridgeTest(unittest.TestCase):
         )
         self.assertEqual(status, 200)
         self.assertEqual(body["fileName"], filename)
-        self.assertTrue((self.root / "workflows" / filename).is_file())
-        self.assertEqual(list((self.root / "workflows").glob("*.tmp")), [])
+        self.assertTrue((self.root / "workflows" / "list" / filename).is_file())
+        self.assertEqual(list((self.root / "workflows" / "list").glob("*.tmp")), [])
 
         status, _, body = self.request(
             "PUT",
@@ -1773,6 +1773,142 @@ class StudioBridgeTest(unittest.TestCase):
         self.assertEqual(body["returnCode"], 0)
         self.assertIn("nodes=1", body["stdout"])
 
+    def test_activate_workflow_copies_into_current_and_replaces_previous(self):
+        first = {"name": "First", "nodes": [{"id": 1}], "links": []}
+        second = {"name": "Second", "nodes": [{"id": 2}], "links": []}
+        self.request("PUT", "/workflows/first.json", payload=first)
+        self.request("PUT", "/workflows/second.json", payload=second)
+        current_dir = self.root / "workflows" / "current"
+        temp_dir = self.root / "workflows" / "temp"
+        (current_dir / "old.json").write_text("{}", encoding="utf-8")
+
+        status, _, body = self.request(
+            "POST",
+            "/workflows/first.json/activate",
+            payload={},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(body["fileName"], "current/first.json")
+        self.assertEqual(body["sourceFileName"], "first.json")
+        self.assertTrue((current_dir / "first.json").is_file())
+        self.assertFalse((current_dir / "old.json").exists())
+        self.assertFalse((temp_dir / "old.json").exists())
+        self.assertEqual(
+            json.loads((current_dir / "first.json").read_text(encoding="utf-8")),
+            first,
+        )
+
+        current_encoded = urllib.parse.quote("current/first.json", safe="")
+        updated = {"name": "Current Edit", "nodes": [{"id": 3}], "links": []}
+        status, _, body = self.request(
+            "PUT",
+            f"/workflows/{current_encoded}",
+            payload=updated,
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(body["fileName"], "current/first.json")
+        self.assertEqual(
+            json.loads((current_dir / "first.json").read_text(encoding="utf-8")),
+            updated,
+        )
+        self.assertEqual(
+            json.loads((self.root / "workflows" / "list" / "first.json").read_text(encoding="utf-8")),
+            updated,
+        )
+
+        draft_only = {"name": "Draft Only", "nodes": [{"id": 99}], "links": []}
+        status, _, body = self.request(
+            "PUT",
+            f"/workflows/{current_encoded}",
+            payload=draft_only,
+            extra_headers={"X-InfraX-Current-Only": "true"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(body["fileName"], "current/first.json")
+        self.assertEqual(
+            json.loads((current_dir / "first.json").read_text(encoding="utf-8")),
+            draft_only,
+        )
+        self.assertEqual(
+            json.loads((self.root / "workflows" / "list" / "first.json").read_text(encoding="utf-8")),
+            updated,
+        )
+
+        status, _, body = self.request(
+            "POST",
+            "/workflows/second.json/activate",
+            payload={},
+            extra_headers={"X-InfraX-Archive-Current": "true"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(body["fileName"], "current/second.json")
+        self.assertFalse((current_dir / "first.json").exists())
+        archived_names = [path.name for path in temp_dir.glob("first__*.json")]
+        self.assertEqual(len(archived_names), 1)
+        self.assertTrue((current_dir / "second.json").is_file())
+
+    def test_temp_workflows_can_be_listed_restored_and_deleted(self):
+        self.request("PUT", "/workflows/asset.json", payload={"nodes": [], "links": []})
+        current_dir = self.root / "workflows" / "current"
+        temp_dir = self.root / "workflows" / "temp"
+        draft = {"name": "Draft", "nodes": [{"id": 7}], "links": []}
+        (current_dir / "draft.json").write_text(json.dumps(draft), encoding="utf-8")
+
+        status, _, body = self.request(
+            "POST",
+            "/workflows/current/clear",
+            payload={},
+            extra_headers={"X-InfraX-Archive-Current": "true"},
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(body["ok"])
+        self.assertEqual(len(body["archived"]), 1)
+        self.assertTrue(current_dir.is_dir())
+        self.assertEqual(list(current_dir.iterdir()), [])
+        self.assertTrue((self.root / "workflows" / "list" / "asset.json").is_file())
+        temp_name = body["archived"][0]
+        self.assertTrue(temp_name.startswith("temp/draft__"))
+
+        status, _, body = self.request("GET", "/workflows")
+        self.assertEqual(status, 200)
+        self.assertEqual(body["tempWorkflows"][0]["fileName"], temp_name)
+        self.assertEqual(body["tempWorkflows"][0]["name"], "Draft")
+        self.assertEqual(body["tempWorkflows"][0]["nodeCount"], 1)
+
+        encoded_temp = urllib.parse.quote(temp_name, safe="")
+        status, _, body = self.request(
+            "POST",
+            f"/workflows/{encoded_temp}/restore",
+            payload={},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(body["workflow"], draft)
+        self.assertTrue(body["fileName"].startswith("current/draft__"))
+        self.assertFalse((temp_dir / temp_name.split("/", 1)[1]).exists())
+        restored_name = body["fileName"]
+
+        self.request(
+            "POST",
+            "/workflows/current/clear",
+            payload={},
+            extra_headers={"X-InfraX-Archive-Current": "true"},
+        )
+        status, _, body = self.request("GET", "/workflows")
+        self.assertEqual(status, 200)
+        self.assertTrue(body["tempWorkflows"])
+        temp_name = body["tempWorkflows"][0]["fileName"]
+        encoded_temp = urllib.parse.quote(temp_name, safe="")
+        status, _, body = self.request(
+            "POST",
+            f"/workflows/{encoded_temp}/delete",
+            payload={},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(body["fileName"], temp_name)
+        status, _, body = self.request("GET", "/workflows")
+        self.assertEqual(status, 200)
+        self.assertEqual(body["tempWorkflows"], [])
+
     def test_run_returns_process_failure_without_hiding_output(self):
         workflow = {"nodes": [], "links": [], "fail": True}
         self.request("PUT", "/workflows/failure.json", payload=workflow)
@@ -1784,7 +1920,7 @@ class StudioBridgeTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertFalse(body["ok"])
         self.assertEqual(body["returnCode"], 7)
-        self.assertIn("workflow=workflows/failure.json", body["stdout"])
+        self.assertIn("workflow=workflows/list/failure.json", body["stdout"])
 
     def test_run_timeout_stops_long_running_process(self):
         self.server.state.run_timeout = 0.05

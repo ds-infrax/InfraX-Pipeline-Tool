@@ -22,7 +22,7 @@
         <span class="eyebrow">CURRENT WORKFLOW</span>
         <div class="workflow-context-row">
           <h1 id="currentWorkflowName">example_simple</h1>
-          <span class="save-state" id="saveState" title="편집 중에는 브라우저에 자동 저장되고, 저장 버튼을 누르면 workflows 폴더에 기록됩니다.">
+          <span class="save-state" id="saveState" title="편집 중에는 브라우저에 자동 저장되고, 저장 버튼을 누르면 workflows/list 폴더에 확정 저장됩니다.">
             <span class="save-state-dot"></span>
             <span id="saveStateText">브라우저 초안 준비 중</span>
           </span>
@@ -33,17 +33,21 @@
         <button class="icon-button" id="historyBtn" type="button" title="변경 기록" aria-label="변경 기록 열기">
           <span class="material-symbols-outlined">history</span>
         </button>
-        <button class="btn ghost" id="saveWorkflowBtn" type="button" title="현재 워크플로우를 workflows 폴더에 저장">
+        <button class="btn ghost" id="resetWorkflowBtn" type="button" title="현재 편집 화면을 빈 워크플로우로 초기화">
+          <span class="material-symbols-outlined">restart_alt</span>
+          초기화
+        </button>
+        <button class="btn ghost" id="cloneWorkflowBtn" type="button" title="현재 워크플로우를 복제해 새 작업본으로 시작">
+          <span class="material-symbols-outlined">content_copy</span>
+          복제
+        </button>
+        <button class="btn ghost" id="saveWorkflowBtn" type="button" title="현재 워크플로우를 workflows/list 폴더에 저장">
           <span class="material-symbols-outlined">save</span>
-          파일 저장
+          저장
         </button>
         <button class="btn ghost" id="runWorkflowBtn" type="button" title="저장한 워크플로우를 main.py로 실행">
           <span class="material-symbols-outlined">play_arrow</span>
           실행
-        </button>
-        <button class="btn ghost" id="downloadBtn" type="button">
-          <span class="material-symbols-outlined">download</span>
-          JSON 내보내기
         </button>
         <button class="btn primary" id="registerWorkflowBtn" type="button" title="Marketplace 계정 연결 상태를 확인합니다.">
           <span class="material-symbols-outlined">link</span>
@@ -127,12 +131,18 @@
               </button>
             </div>
             <div class="section-inline-actions">
-              <button class="text-action" id="cloneWorkflowBtn" type="button">
-                <span class="material-symbols-outlined">content_copy</span> 복제
-              </button>
               <button class="text-action" id="toggleWorkflowListBtn" type="button">현재만</button>
             </div>
             <div class="nav-list" id="workflowList"></div>
+
+            <div class="temp-workflow-panel" id="tempWorkflowPanel">
+              <button class="temp-workflow-toggle" id="tempWorkflowToggleBtn" type="button" aria-expanded="false">
+                <span class="material-symbols-outlined" aria-hidden="true">inventory_2</span>
+                <span>임시 보관함</span>
+                <b id="tempWorkflowCount">0</b>
+              </button>
+              <div class="nav-list temp-workflow-list hidden" id="tempWorkflowList" aria-live="polite"></div>
+            </div>
 
             <div class="subsection-heading">
               <div>

@@ -130,6 +130,60 @@ class StudioSidebarNavigationTest(unittest.TestCase):
         self.assertNotIn("폴더 저장", HTML_SOURCE)
         self.assertNotIn("마켓 공유", HTML_SOURCE)
 
+    def test_topbar_workflow_actions_match_local_tool_flow(self):
+        topbar_start = HTML_SOURCE.index('<div class="topbar-actions">')
+        topbar_end = HTML_SOURCE.index("</div>", topbar_start)
+        topbar_markup = HTML_SOURCE[topbar_start:topbar_end]
+        self.assertIn('id="resetWorkflowBtn"', HTML_SOURCE)
+        self.assertIn('id="cloneWorkflowBtn"', topbar_markup)
+        self.assertIn('id="saveWorkflowBtn"', HTML_SOURCE)
+        self.assertIn('id="runWorkflowBtn"', HTML_SOURCE)
+        self.assertNotIn('id="downloadBtn"', HTML_SOURCE)
+        self.assertNotIn("JSON 내보내기", HTML_SOURCE)
+        self.assertNotIn("파일 저장", HTML_SOURCE)
+        self.assertIn(">저장", HTML_SOURCE)
+        self.assertIn("function resetCurrentWorkflow()", APP_SOURCE)
+        self.assertIn('document.getElementById("resetWorkflowBtn")?.addEventListener("click", resetCurrentWorkflow)', APP_SOURCE)
+        self.assertIn('document.getElementById("cloneWorkflowBtn").addEventListener("click", cloneWorkflow)', APP_SOURCE)
+        self.assertIn("workflows/${savedWorkflowDisplayName(currentWorkflowFileName)} 저장 완료", APP_SOURCE)
+
+        workflow_start = HTML_SOURCE.index('id="workflowSection"')
+        workflow_end = HTML_SOURCE.index('id="tempWorkflowPanel"', workflow_start)
+        workflow_markup = HTML_SOURCE[workflow_start:workflow_end]
+        self.assertNotIn('id="cloneWorkflowBtn"', workflow_markup)
+
+    def test_cloned_workflow_is_created_as_current_draft_file(self):
+        self.assertIn("async function cloneWorkflow()", APP_SOURCE)
+        self.assertIn("const fileName = currentWorkflowFileNameForName(name);", APP_SOURCE)
+        self.assertIn("await archiveDirtyCurrentWorkflowBeforeReplacement();", APP_SOURCE)
+        self.assertIn("await clearCurrentWorkflowFolder({ archive: false });", APP_SOURCE)
+        self.assertIn("await saveCurrentWorkflowDraftFile(fileName, data);", APP_SOURCE)
+        self.assertIn('\"X-InfraX-Current-Only\": \"true\"', APP_SOURCE)
+        self.assertIn("currentWorkflowFileName = fileName;", APP_SOURCE)
+        self.assertIn("저장을 누르면 workflows/list에 확정됩니다.", APP_SOURCE)
+
+    def test_temp_workflow_archive_is_visible_and_actionable(self):
+        self.assertIn('id="tempWorkflowPanel"', HTML_SOURCE)
+        self.assertIn('id="tempWorkflowToggleBtn"', HTML_SOURCE)
+        self.assertIn('id="tempWorkflowList"', HTML_SOURCE)
+        self.assertIn("let tempWorkflowItems = []", APP_SOURCE)
+        self.assertIn("function renderTempWorkflowList()", APP_SOURCE)
+        self.assertIn("result.tempWorkflows", APP_SOURCE)
+        self.assertIn("async function restoreTempWorkflow(fileName)", APP_SOURCE)
+        self.assertIn("async function deleteTempWorkflow(fileName)", APP_SOURCE)
+        self.assertIn("X-InfraX-Archive-Current", APP_SOURCE)
+        self.assertIn("저장 안 된 작업본", APP_SOURCE)
+        self.assertIn(".temp-workflow-panel", STYLE_SOURCE)
+
+    def test_temp_archive_only_keeps_changed_non_empty_workflows(self):
+        self.assertIn("function workflowShouldArchiveToTemp()", APP_SOURCE)
+        self.assertIn("if (!workflowShouldArchiveToTemp()) {", APP_SOURCE)
+        self.assertIn("await clearCurrentWorkflowFolder({ archive: false });", APP_SOURCE)
+        self.assertIn("const hasGraphContent = Boolean(snapshot.nodes?.length || snapshot.links?.length);", APP_SOURCE)
+        self.assertIn("if (!hasGraphContent) return false;", APP_SOURCE)
+        self.assertIn("const savedHash = meta.lastFolderSavedHash || lastFolderSavedHash;", APP_SOURCE)
+        self.assertIn("return !savedHash || currentHash !== savedHash;", APP_SOURCE)
+
     def test_local_workflow_files_have_a_separate_sidebar_tab(self):
         self.assertIn('data-target="localFilesSection"', HTML_SOURCE)
         self.assertIn('id="localFilesSection"', HTML_SOURCE)
@@ -154,7 +208,8 @@ class StudioSidebarNavigationTest(unittest.TestCase):
             'document.getElementById("marketplaceBtn").addEventListener("click", openHostedMarketplace);',
             APP_SOURCE,
         )
-        self.assertIn('window.open(siteUrl.toString(), "_blank", "noopener,noreferrer")', APP_SOURCE)
+        self.assertIn('siteUrl.searchParams.set("returnTo", globalThis.location.href);', APP_SOURCE)
+        self.assertIn('window.open(siteUrl.toString(), "infrax_marketplace")', APP_SOURCE)
 
     def test_workflow_marketplace_button_shows_account_status(self):
         self.assertIn('class="button-label">Marketplace 연결 정보</span>', HTML_SOURCE)
@@ -202,6 +257,18 @@ class StudioSidebarNavigationTest(unittest.TestCase):
         self.assertIn("...currentWorkflow.nodes.map", APP_SOURCE)
         self.assertIn("...currentWorkflow.links.map", APP_SOURCE)
         self.assertIn("검색 조건에 맞는 객체가 없습니다.", APP_SOURCE)
+
+    def test_canvas_object_list_marks_nodes_missing_from_local_catalog(self):
+        self.assertIn("isNodeMissingFromCatalog(node)", APP_SOURCE)
+        self.assertIn("현재 PC의 catalog.json에서 확인되지 않은 노드입니다.", APP_SOURCE)
+        self.assertIn("로컬 없음", APP_SOURCE)
+        self.assertIn("현재 PC에 설치된 노드 목록에 없음", APP_SOURCE)
+        self.assertIn("object-missing-note", APP_SOURCE)
+        self.assertRegex(
+            STYLE_SOURCE,
+            r"\.object-item\.missing-node\s*\{[^}]*border-color:[^}]*#e87325",
+        )
+        self.assertIn(".object-missing-note", STYLE_SOURCE)
 
     def test_canvas_object_controls_stay_on_one_row(self):
         self.assertRegex(

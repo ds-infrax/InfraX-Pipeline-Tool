@@ -1,4 +1,4 @@
-from workflow.core.schema import materialize_value
+from app.core.schema import materialize_value
 
 
 def validate_input(node_id, input_port, node_def):

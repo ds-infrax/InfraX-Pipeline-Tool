@@ -1,4 +1,4 @@
-from workflow.nodes.basic import Add, NumberInput, OutputValue
+from app.nodes.basic.math import Add, NumberInput, OutputValue
 
 
 __all__ = [

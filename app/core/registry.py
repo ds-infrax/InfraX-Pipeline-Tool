@@ -3,9 +3,9 @@ import inspect
 import pkgutil
 from typing import Any, get_origin
 
-from workflow.core.loader import get_node_modules
-from workflow.core.schema import describe_init_inputs, describe_run_io
-from workflow.node import Node
+from app.core.loader import get_node_modules
+from app.core.schema import describe_init_inputs, describe_run_io
+from app.node import Node
 
 
 def list_nodes(node_modules=None, json_safe=True):

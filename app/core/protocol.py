@@ -1,8 +1,8 @@
 from dataclasses import dataclass
 
-from workflow.core.input import validate_input
-from workflow.core.loader import get_node_modules
-from workflow.core.registry import list_nodes
+from app.core.input import validate_input
+from app.core.loader import get_node_modules
+from app.core.registry import list_nodes
 
 
 CATALOG_SCHEMA = "workflow.catalog.v1"

@@ -447,6 +447,27 @@ def _validate_package_id(value: str) -> str:
     return value
 
 
+def _safe_workflow_relative_path(value: str) -> Path:
+    """Return a safe workflow path relative to workflows/.
+
+    Normal workflow assets live under workflows/list/.  The active editing copy
+    lives under workflows/current/, and replaced drafts are stashed under
+    workflows/temp/.
+    """
+
+    normalized = str(value or "").replace("\\", "/")
+    parts = [part for part in normalized.split("/") if part]
+    if len(parts) == 1:
+        return Path("list") / _safe_workflow_filename(parts[0])
+    if len(parts) == 2 and parts[0] in {"list", "current", "temp"}:
+        return Path(parts[0]) / _safe_workflow_filename(parts[1])
+    raise BridgeError(
+        HTTPStatus.BAD_REQUEST,
+        "invalid_filename",
+        "workflows/list, workflows/current, workflows/temp 폴더의 JSON 파일만 사용할 수 있습니다.",
+    )
+
+
 def _validate_package_metadata(value: Any, *, expected_id: str) -> dict[str, Any]:
     """Validate marketplace-supplied metadata without accepting paths or commands."""
 
@@ -770,12 +791,12 @@ class BridgeState:
 
         catalog_script = resolved_root / "catalog.py"
         main_script = resolved_root / "main.py"
-        workflow_package = resolved_root / "workflow"
-        workflow_init = workflow_package / "__init__.py"
+        app_package = resolved_root / "app"
+        app_init = app_package / "__init__.py"
         required_paths = (
             (catalog_script, resolved_root),
             (main_script, resolved_root),
-            (workflow_init, workflow_package),
+            (app_init, app_package),
         )
         for required_path, required_parent in required_paths:
             try:
@@ -784,7 +805,7 @@ class BridgeState:
                 raise BridgeError(
                     HTTPStatus.UNPROCESSABLE_ENTITY,
                     "tool_root_missing_files",
-                    "실행 도구 폴더에는 catalog.py, main.py, workflow 패키지가 필요합니다.",
+                    "실행 도구 폴더에는 catalog.py, main.py, app 패키지가 필요합니다.",
                 ) from error
             try:
                 resolved_parent = required_parent.resolve(strict=True)
@@ -792,7 +813,7 @@ class BridgeState:
                 raise BridgeError(
                     HTTPStatus.UNPROCESSABLE_ENTITY,
                     "tool_root_missing_files",
-                    "실행 도구 폴더의 workflow 패키지를 확인할 수 없습니다.",
+                    "실행 도구 폴더의 app 패키지를 확인할 수 없습니다.",
                 ) from error
             if not resolved_required.is_file() or resolved_required.parent != resolved_parent:
                 raise BridgeError(
@@ -800,16 +821,18 @@ class BridgeState:
                     "tool_root_missing_files",
                     "필수 실행 파일은 실행 도구 폴더 내부의 정해진 위치에 있어야 합니다.",
                 )
-        if workflow_package.resolve(strict=True).parent != resolved_root:
+        if app_package.resolve(strict=True).parent != resolved_root:
             raise BridgeError(
                 HTTPStatus.UNPROCESSABLE_ENTITY,
                 "tool_root_missing_files",
-                "workflow 패키지는 실행 도구 폴더 바로 아래에 있어야 합니다.",
+                "app 패키지는 실행 도구 폴더 바로 아래에 있어야 합니다.",
             )
 
         workflows_path = resolved_root / "workflows"
         try:
             workflows_path.mkdir(parents=True, exist_ok=True)
+            for workflow_subdir in ("list", "current", "temp"):
+                (workflows_path / workflow_subdir).mkdir(parents=True, exist_ok=True)
             resolved_workflows = workflows_path.resolve(strict=True)
         except (OSError, RuntimeError, ValueError) as error:
             raise BridgeError(
@@ -1958,14 +1981,23 @@ class BridgeState:
         except OSError:
             pass
 
+    def clear_current_workflows(self, *, archive: bool = True) -> dict[str, Any]:
+        with self.workflow_lock:
+            current_dir = self._current_workflow_dir()
+            archived = self._clear_current_workflows(current_dir, archive=archive)
+            current_dir.mkdir(parents=True, exist_ok=True)
+        return {"ok": True, "directory": "workflows/current", "archived": archived}
+
     def list_workflows(self) -> list[dict[str, Any]]:
         with self.workflow_lock:
             workflows: list[dict[str, Any]] = []
-            for candidate in self.workflows_dir.iterdir():
+            list_dir = self._list_workflow_dir()
+            list_dir.mkdir(parents=True, exist_ok=True)
+            for candidate in list_dir.iterdir():
                 if not candidate.is_file() or candidate.suffix.lower() != ".json":
                     continue
                 try:
-                    safe_path = self._workflow_path(candidate.name)
+                    safe_path = self._workflow_path(f"list/{candidate.name}")
                     stat = safe_path.stat()
                     data = json.loads(safe_path.read_text(encoding="utf-8"))
                 except (BridgeError, OSError, UnicodeError, json.JSONDecodeError):
@@ -1980,6 +2012,33 @@ class BridgeState:
                     }
                 )
             return sorted(workflows, key=lambda item: item["fileName"].casefold())
+
+    def list_temp_workflows(self) -> list[dict[str, Any]]:
+        with self.workflow_lock:
+            workflows: list[dict[str, Any]] = []
+            temp_dir = self._temp_workflow_dir()
+            temp_dir.mkdir(parents=True, exist_ok=True)
+            for candidate in temp_dir.iterdir():
+                if not candidate.is_file() or candidate.suffix.lower() != ".json":
+                    continue
+                try:
+                    safe_path = self._workflow_path(f"temp/{candidate.name}")
+                    stat = safe_path.stat()
+                    data = json.loads(safe_path.read_text(encoding="utf-8"))
+                except (BridgeError, OSError, UnicodeError, json.JSONDecodeError):
+                    continue
+                workflow_name = data.get("name") if isinstance(data, dict) else None
+                node_count = len(data.get("nodes", [])) if isinstance(data, dict) and isinstance(data.get("nodes"), list) else 0
+                workflows.append(
+                    {
+                        "fileName": f"temp/{candidate.name}",
+                        "name": workflow_name if isinstance(workflow_name, str) else candidate.stem,
+                        "size": stat.st_size,
+                        "nodeCount": node_count,
+                        "modifiedAt": _iso_timestamp(stat.st_mtime),
+                    }
+                )
+            return sorted(workflows, key=lambda item: item["modifiedAt"], reverse=True)
 
     def read_workflow(self, filename: str) -> dict[str, Any]:
         with self.workflow_lock:
@@ -2002,11 +2061,116 @@ class BridgeState:
             stat = path.stat()
             return {
                 "ok": True,
-                "fileName": filename,
+                "fileName": self._workflow_response_filename(path),
                 "workflow": workflow,
                 "size": stat.st_size,
                 "modifiedAt": _iso_timestamp(stat.st_mtime),
             }
+
+    def activate_workflow(self, filename: str, *, archive_current: bool = False) -> dict[str, Any]:
+        with self.workflow_lock:
+            source_path = self._workflow_path(filename)
+            if source_path.parent != self._list_workflow_dir():
+                raise BridgeError(
+                    HTTPStatus.BAD_REQUEST,
+                    "invalid_filename",
+                    "자산 워크플로우는 workflows 폴더의 원본 JSON 파일에서만 열 수 있습니다.",
+                )
+            if not source_path.is_file():
+                raise BridgeError(
+                    HTTPStatus.NOT_FOUND,
+                    "workflow_not_found",
+                    f"워크플로우 파일을 찾을 수 없습니다: {filename}",
+                )
+            try:
+                workflow = json.loads(source_path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeError, json.JSONDecodeError) as error:
+                raise BridgeError(
+                    HTTPStatus.UNPROCESSABLE_ENTITY,
+                    "workflow_invalid",
+                    f"워크플로우 JSON을 읽을 수 없습니다: {filename}",
+                ) from error
+            self._validate_workflow_shape(workflow)
+
+            current_dir = self._current_workflow_dir()
+            self._clear_current_workflows(current_dir, archive=archive_current)
+            current_dir.mkdir(parents=True, exist_ok=True)
+            target_path = current_dir / source_path.name
+            shutil.copy2(source_path, target_path)
+            stat = target_path.stat()
+            current_filename = f"current/{source_path.name}"
+            return {
+                "ok": True,
+                "fileName": current_filename,
+                "sourceFileName": source_path.name,
+                "workflow": workflow,
+                "size": stat.st_size,
+                "modifiedAt": _iso_timestamp(stat.st_mtime),
+            }
+
+    def restore_temp_workflow(self, filename: str) -> dict[str, Any]:
+        with self.workflow_lock:
+            source_path = self._workflow_path(filename)
+            if source_path.parent != self._temp_workflow_dir():
+                raise BridgeError(
+                    HTTPStatus.BAD_REQUEST,
+                    "invalid_filename",
+                    "임시 보관함의 워크플로우만 복원할 수 있습니다.",
+                )
+            if not source_path.is_file():
+                raise BridgeError(
+                    HTTPStatus.NOT_FOUND,
+                    "workflow_not_found",
+                    f"임시 워크플로우 파일을 찾을 수 없습니다: {filename}",
+                )
+            try:
+                workflow = json.loads(source_path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeError, json.JSONDecodeError) as error:
+                raise BridgeError(
+                    HTTPStatus.UNPROCESSABLE_ENTITY,
+                    "workflow_invalid",
+                    f"임시 워크플로우 JSON을 읽을 수 없습니다: {filename}",
+                ) from error
+            self._validate_workflow_shape(workflow)
+
+            current_dir = self._current_workflow_dir()
+            self._clear_current_workflows(current_dir, archive=False)
+            current_dir.mkdir(parents=True, exist_ok=True)
+            base_name = source_path.name
+            for prefix in ("draft-",):
+                if base_name.startswith(prefix):
+                    base_name = base_name[len(prefix):]
+            target_path = current_dir / base_name
+            if target_path.exists():
+                target_path = current_dir / self._unique_temp_filename(base_name)
+            shutil.move(str(source_path), str(target_path))
+            stat = target_path.stat()
+            return {
+                "ok": True,
+                "fileName": f"current/{target_path.name}",
+                "sourceFileName": f"temp/{source_path.name}",
+                "workflow": workflow,
+                "size": stat.st_size,
+                "modifiedAt": _iso_timestamp(stat.st_mtime),
+            }
+
+    def delete_temp_workflow(self, filename: str) -> dict[str, Any]:
+        with self.workflow_lock:
+            path = self._workflow_path(filename)
+            if path.parent != self._temp_workflow_dir():
+                raise BridgeError(
+                    HTTPStatus.BAD_REQUEST,
+                    "invalid_filename",
+                    "임시 보관함의 워크플로우만 삭제할 수 있습니다.",
+                )
+            if not path.is_file():
+                raise BridgeError(
+                    HTTPStatus.NOT_FOUND,
+                    "workflow_not_found",
+                    f"임시 워크플로우 파일을 찾을 수 없습니다: {filename}",
+                )
+            path.unlink()
+        return {"ok": True, "fileName": filename}
 
     def save_workflow(
         self,
@@ -2014,6 +2178,7 @@ class BridgeState:
         workflow: Any,
         *,
         overwrite: bool = True,
+        mirror_current_to_list: bool = True,
     ) -> dict[str, Any]:
         self._validate_workflow_shape(workflow)
         payload = (json.dumps(workflow, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
@@ -2026,6 +2191,7 @@ class BridgeState:
 
         with self.workflow_lock:
             path = self._workflow_path(filename)
+            path.parent.mkdir(parents=True, exist_ok=True)
             if not overwrite and path.exists():
                 raise BridgeError(
                     HTTPStatus.CONFLICT,
@@ -2036,9 +2202,9 @@ class BridgeState:
             try:
                 with tempfile.NamedTemporaryFile(
                     mode="wb",
-                    prefix=f".{filename}.",
+                    prefix=f".{path.name}.",
                     suffix=".tmp",
-                    dir=self.workflows_dir,
+                    dir=path.parent,
                     delete=False,
                 ) as temp_file:
                     temp_path = Path(temp_file.name)
@@ -2047,6 +2213,10 @@ class BridgeState:
                     os.fsync(temp_file.fileno())
                 os.replace(temp_path, path)
                 temp_path = None
+                if mirror_current_to_list and path.parent == self._current_workflow_dir():
+                    list_path = self._list_workflow_dir() / path.name
+                    list_path.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(path, list_path)
                 stat = path.stat()
             except OSError as error:
                 raise BridgeError(
@@ -2063,7 +2233,7 @@ class BridgeState:
 
         return {
             "ok": True,
-            "fileName": filename,
+            "fileName": self._workflow_response_filename(path),
             "size": stat.st_size,
             "modifiedAt": _iso_timestamp(stat.st_mtime),
         }
@@ -2094,16 +2264,91 @@ class BridgeState:
         }
 
     def _workflow_path(self, filename: str) -> Path:
-        safe_name = _safe_workflow_filename(filename)
-        candidate = self.workflows_dir / safe_name
+        relative_path = _safe_workflow_relative_path(filename)
+        candidate = self.workflows_dir / relative_path
         resolved = candidate.resolve(strict=False)
-        if resolved.parent != self.workflows_dir:
+        try:
+            relative_resolved = resolved.relative_to(self.workflows_dir)
+        except ValueError as error:
+            raise BridgeError(
+                HTTPStatus.BAD_REQUEST,
+                "invalid_filename",
+                "workflows 폴더 밖의 경로에는 접근할 수 없습니다.",
+            ) from error
+        workflow_area = relative_resolved.parts[:1]
+        if workflow_area == ("current",):
+            allowed_parent = self._current_workflow_dir()
+        elif workflow_area == ("temp",):
+            allowed_parent = self._temp_workflow_dir()
+        else:
+            allowed_parent = self._list_workflow_dir()
+        if resolved.parent != allowed_parent:
             raise BridgeError(
                 HTTPStatus.BAD_REQUEST,
                 "invalid_filename",
                 "workflows 폴더 밖의 경로에는 접근할 수 없습니다.",
             )
         return resolved
+
+    def _current_workflow_dir(self) -> Path:
+        return (self.workflows_dir / "current").resolve(strict=False)
+
+    def _list_workflow_dir(self) -> Path:
+        return (self.workflows_dir / "list").resolve(strict=False)
+
+    def _temp_workflow_dir(self) -> Path:
+        return (self.workflows_dir / "temp").resolve(strict=False)
+
+    def _workflow_response_filename(self, path: Path) -> str:
+        if path.parent == self._current_workflow_dir():
+            return f"current/{path.name}"
+        if path.parent == self._temp_workflow_dir():
+            return f"temp/{path.name}"
+        return path.name
+
+    def _unique_temp_filename(self, name: str) -> str:
+        stem = Path(name).stem or "workflow"
+        suffix = Path(name).suffix or ".json"
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+        candidate = f"{stem}__{timestamp}{suffix}"
+        temp_dir = self._temp_workflow_dir()
+        index = 2
+        while (temp_dir / candidate).exists():
+            candidate = f"{stem}__{timestamp}-{index}{suffix}"
+            index += 1
+        return candidate
+
+    def _clear_current_workflows(self, current_dir: Path | None = None, *, archive: bool = True) -> list[str]:
+        target = current_dir or self._current_workflow_dir()
+        if target.name != "current" or target.parent != self.workflows_dir:
+            raise BridgeError(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                "current_workflow_path_invalid",
+                "current 워크플로우 폴더 경로가 안전하지 않습니다.",
+            )
+        if not target.exists():
+            return []
+        temp_dir = self._temp_workflow_dir()
+        if temp_dir.name != "temp" or temp_dir.parent != self.workflows_dir:
+            raise BridgeError(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                "temp_workflow_path_invalid",
+                "temp 워크플로우 폴더 경로가 안전하지 않습니다.",
+            )
+        archived: list[str] = []
+        if archive:
+            temp_dir.mkdir(parents=True, exist_ok=True)
+        for child in target.iterdir():
+            if archive and child.is_file() and child.suffix.lower() == ".json":
+                target_name = self._unique_temp_filename(child.name)
+                try:
+                    shutil.move(str(child), str(temp_dir / target_name))
+                    archived.append(f"temp/{target_name}")
+                    continue
+                except OSError:
+                    pass
+            self._remove_local_path(child)
+        return archived
 
     @staticmethod
     def _validate_workflow_shape(workflow: Any) -> None:
@@ -2394,7 +2639,8 @@ class StudioBridgeHandler(BaseHTTPRequestHandler):
         self.send_header(
             "Access-Control-Allow-Headers",
             "Authorization, Content-Type, If-None-Match, "
-            "X-InfraX-Tool-Context, X-InfraX-Package-Metadata",
+            "X-InfraX-Tool-Context, X-InfraX-Package-Metadata, "
+            "X-InfraX-Current-Only, X-InfraX-Archive-Current",
         )
         if self.headers.get("Access-Control-Request-Private-Network", "").lower() == "true":
             self.send_header("Access-Control-Allow-Private-Network", "true")
@@ -2563,7 +2809,20 @@ class StudioBridgeHandler(BaseHTTPRequestHandler):
             if method == "GET" and segments == ["workflows"]:
                 self._send_json(
                     HTTPStatus.OK,
-                    {"ok": True, "workflows": state.list_workflows()},
+                    {
+                        "ok": True,
+                        "workflows": state.list_workflows(),
+                        "tempWorkflows": state.list_temp_workflows(),
+                    },
+                )
+                return
+            if method == "POST" and segments == ["workflows", "current", "clear"]:
+                self._ensure_empty_or_json_body()
+                self._send_json(
+                    HTTPStatus.OK,
+                    state.clear_current_workflows(
+                        archive=self.headers.get("X-InfraX-Archive-Current") == "true",
+                    ),
                 )
                 return
             if len(segments) == 2 and segments[0] == "workflows":
@@ -2579,9 +2838,52 @@ class StudioBridgeHandler(BaseHTTPRequestHandler):
                             filename,
                             workflow,
                             overwrite=self.headers.get("If-None-Match") != "*",
+                            mirror_current_to_list=self.headers.get("X-InfraX-Current-Only") != "true",
                         ),
                     )
                     return
+            if (
+                method == "POST"
+                and len(segments) == 3
+                and segments[0] == "workflows"
+                and segments[2] == "activate"
+            ):
+                self._ensure_empty_or_json_body()
+                filename = self._decode_filename(segments[1])
+                self._send_json(
+                    HTTPStatus.OK,
+                    state.activate_workflow(
+                        filename,
+                        archive_current=self.headers.get("X-InfraX-Archive-Current") == "true",
+                    ),
+                )
+                return
+            if (
+                method == "POST"
+                and len(segments) == 3
+                and segments[0] == "workflows"
+                and segments[2] == "restore"
+            ):
+                self._ensure_empty_or_json_body()
+                filename = self._decode_filename(segments[1])
+                self._send_json(
+                    HTTPStatus.OK,
+                    state.restore_temp_workflow(filename),
+                )
+                return
+            if (
+                method == "POST"
+                and len(segments) == 3
+                and segments[0] == "workflows"
+                and segments[2] == "delete"
+            ):
+                self._ensure_empty_or_json_body()
+                filename = self._decode_filename(segments[1])
+                self._send_json(
+                    HTTPStatus.OK,
+                    state.delete_temp_workflow(filename),
+                )
+                return
             if (
                 method == "POST"
                 and len(segments) == 3
@@ -3750,7 +4052,7 @@ class StudioBridgeHandler(BaseHTTPRequestHandler):
                 "invalid_filename",
                 "파일명 URL 인코딩이 올바르지 않습니다.",
             ) from error
-        return _safe_workflow_filename(filename)
+        return _safe_workflow_relative_path(filename).as_posix()
 
     def _decode_package_id(self, segment: str) -> str:
         try:

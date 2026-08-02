@@ -25,7 +25,9 @@ catalog.json
 /custom_nodes/sample/**/*.py[cod]
 
 /workflows/*
-!/workflows/sample_a+b=c.json
-!/workflows/sample_custom.json
+!/workflows/list/
+!/workflows/list/**
+/workflows/current/
+/workflows/temp/
 
 /models/

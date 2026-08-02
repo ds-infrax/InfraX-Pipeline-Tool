@@ -2,8 +2,8 @@ import json
 from pathlib import Path
 from pprint import pprint
 
-from workflow import build_catalog, execute_workflow, parse_workflow, validate_workflow
-from workflow.core.config import NODE_MODULES
+from app import build_catalog, execute_workflow, parse_workflow, validate_workflow
+from app.core.config import NODE_MODULES
 
 
 def run_workflow(workflow_path, runtime_id="local-dev"):

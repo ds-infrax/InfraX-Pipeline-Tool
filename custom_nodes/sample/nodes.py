@@ -1,4 +1,4 @@
-from workflow.node import Node
+from app.node import Node
 
 
 class Scale(Node):

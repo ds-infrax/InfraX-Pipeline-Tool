@@ -1,4 +1,4 @@
-from workflow.core import (
+from app.core import (
     Node,
     build_catalog,
     execute_workflow,

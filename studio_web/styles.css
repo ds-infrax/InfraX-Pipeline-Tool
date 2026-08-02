@@ -994,6 +994,90 @@ textarea:hover {
   gap: 7px;
 }
 
+.temp-workflow-panel {
+  display: grid;
+  gap: 7px;
+  margin: 10px 0 16px;
+}
+
+.temp-workflow-toggle {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 10px;
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--surface-mid) 72%, white);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: -0.01em;
+  text-align: left;
+}
+
+.temp-workflow-toggle .material-symbols-outlined {
+  font-size: 16px;
+}
+
+.temp-workflow-toggle b {
+  display: inline-flex;
+  min-width: 20px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+  margin-left: auto;
+  border-radius: 999px;
+  background: var(--surface-lowest);
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.temp-workflow-panel.has-items .temp-workflow-toggle {
+  background: color-mix(in srgb, var(--primary-container) 16%, var(--surface-lowest));
+  color: var(--on-surface);
+}
+
+.temp-workflow-panel.has-items .temp-workflow-toggle b {
+  background: var(--primary-container);
+  color: var(--on-primary);
+}
+
+.temp-workflow-list {
+  padding-left: 6px;
+  border-left: 1px dashed color-mix(in srgb, var(--primary) 24%, transparent);
+}
+
+.temp-workflow-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: stretch;
+}
+
+.temp-restore-main {
+  background: rgba(255, 255, 255, 0.42);
+}
+
+.temp-delete-btn {
+  display: inline-flex;
+  width: 28px;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface-mid) 80%, white);
+  color: var(--muted);
+}
+
+.temp-delete-btn:hover {
+  background: color-mix(in srgb, #f97316 12%, var(--surface-lowest));
+  color: #9a3412;
+}
+
+.temp-delete-btn .material-symbols-outlined {
+  font-size: 15px;
+}
+
 .asset-market-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -3204,12 +3288,29 @@ textarea:hover {
 }
 
 .object-item.missing-node {
-  border-color: rgba(232, 115, 37, 0.5);
-  background: rgba(255, 238, 224, 0.75);
+  border-color: rgba(232, 115, 37, 0.62);
+  background: linear-gradient(135deg, rgba(255, 238, 224, 0.92), rgba(255, 248, 241, 0.9));
+  box-shadow: inset 3px 0 0 #e87325;
 }
 
 .object-item.missing-node .object-kind {
+  background: rgba(232, 115, 37, 0.14);
   color: #a84408;
+}
+
+.object-missing-note {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  margin-top: 2px;
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: rgba(232, 115, 37, 0.13);
+  color: #9b3e05;
+  font-style: normal;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
 }
 
 .missing-node-alert {

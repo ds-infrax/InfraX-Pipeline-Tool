@@ -1,7 +1,7 @@
 import argparse
 from pathlib import Path
 
-from workflow.runner import run_workflow
+from app.runner import run_workflow
 
 
 if __name__ == "__main__":

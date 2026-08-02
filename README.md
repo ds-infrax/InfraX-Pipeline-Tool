@@ -9,7 +9,7 @@ git clone InfraX-Pipeline-Tool
 cd InfraX-Pipeline-Tool/custom_nodes
 git clone <custom-node-repo>
 cd ..
-python main.py workflows/sample_custom.json
+python main.py workflows/list/sample_custom.json
 python catalog.py
 ```
 
@@ -19,7 +19,7 @@ This repo contains the runtime, built-in nodes, and a `custom_nodes/` folder whe
 
 ```text
 InfraX-Pipeline-Tool/
-  workflow/
+  app/
     runner.py
     core/
       config.py
@@ -41,6 +41,13 @@ InfraX-Pipeline-Tool/
         a+b=c_workflow.json
         scale_workflow.json
 
+  workflows/
+    list/                  # Saved/imported workflow assets
+      sample_a+b=c.json
+      sample_custom.json
+    current/               # The one workflow currently being edited
+    temp/                  # Volatile stash when current is replaced
+
   main.py                  # Run a workflow JSON
   catalog.py               # Generate catalog.json for GUI server
   pyproject.toml
@@ -61,7 +68,7 @@ Editable install is convenient while developing nodes and runtime code.
 You can also run directly from the repo root without installing while developing:
 
 ```powershell
-python main.py workflows/sample_custom.json
+python main.py workflows/list/sample_custom.json
 python catalog.py
 ```
 
@@ -113,12 +120,12 @@ Studio is already running instead of sharing the port between processes.
    the updated `catalog.json` and shows the discovered nodes.
 3. Canvas edits automatically keep one current draft in browser local storage.
    This protects in-progress edits but does not create a workflow file.
-4. **File Save** writes UTF-8 JSON atomically into the local `workflows/`
-   folder.
-5. Opening another JSON file replaces the one browser draft and editing
-   continues from that workflow.
-6. **Run** invokes `main.py workflows/<filename>.json` and returns the actual
-   process output to the Studio.
+4. **File Save** writes the current editing copy under `workflows/current/`
+   and mirrors the saved asset to `workflows/list/`.
+5. Opening another JSON file loads it from `workflows/list/`, moves the
+   previous current copy to `workflows/temp/`, then edits the new current copy.
+6. **Run** invokes `main.py workflows/current/<filename>.json` and returns the
+   actual process output to the Studio.
 
 The GUI and local API have the same loopback address, so local mode creates a
 temporary `HttpOnly`, `SameSite=Strict` session cookie for `/local-api` and a
@@ -227,9 +234,11 @@ is served:
 | `POST` | `/local-api/tool-contexts` | Validate a tool folder and create a temporary context |
 | `POST` | `/local-api/catalog/refresh` | Run `catalog.py` and return the updated catalog |
 | `GET` | `/local-api/catalog` | Read the current `catalog.json` |
-| `GET` | `/local-api/workflows` | List JSON files under `workflows/` |
-| `GET` | `/local-api/workflows/{filename}` | Read one saved workflow |
-| `PUT` | `/local-api/workflows/{filename}` | Atomically save one workflow |
+| `GET` | `/local-api/workflows` | List JSON files under `workflows/list/` |
+| `GET` | `/local-api/workflows/{filename}` | Read one saved workflow asset from `workflows/list/` |
+| `PUT` | `/local-api/workflows/{filename}` | Atomically save one workflow asset to `workflows/list/` |
+| `POST` | `/local-api/workflows/{filename}/activate` | Copy one asset from `workflows/list/` into `workflows/current/` |
+| `POST` | `/local-api/workflows/current/clear` | Move current editing files to `workflows/temp/` and clear current |
 | `POST` | `/local-api/workflows/{filename}/run` | Run the saved file with `main.py` |
 | `GET` | `/local-api/packages` | List Marketplace packages installed by the local tool |
 | `GET` | `/local-api/custom-node-packages` | List catalog-confirmed local custom-node sources that may be published |
@@ -239,7 +248,8 @@ is served:
 | `PUT` | `/local-api/packages/{id}/publish` | Publish one catalog-confirmed local custom-node source to Marketplace |
 
 The local process does not provide arbitrary command or filesystem access.
-Workflow filenames must be plain `.json` basenames, request bodies are
+Workflow filenames must be plain `.json` basenames, except the controlled
+`current/{filename}` and `temp/{filename}` working paths. Request bodies are
 size-limited, and catalog generation and workflow execution have timeouts.
 
 ### Marketplace package installation
@@ -403,7 +413,7 @@ Small local nodes can also be placed directly under `custom_nodes/`.
 The runtime always scans these module roots:
 
 ```text
-workflow.nodes
+app.nodes
 custom_nodes
 ```
 
@@ -413,7 +423,7 @@ Node keys are stable because the scan roots do not change. For example,
 ## Run A Workflow
 
 ```powershell
-python main.py workflows/sample_a+b=c.json
+python main.py workflows/list/sample_a+b=c.json
 ```
 
 `main.py` validates the workflow passed on the command line, executes it, and
@@ -439,10 +449,10 @@ The GUI server can use this catalog to know which nodes exist, their display nam
 
 ## Writing Nodes
 
-Nodes inherit from `workflow.node.Node`.
+Nodes inherit from `app.node.Node`.
 
 ```python
-from workflow.node import Node
+from app.node import Node
 
 
 class Multiply(Node):
@@ -533,7 +543,7 @@ Catalog nodes look like this:
   "name": "Add",
   "display_name": "Add",
   "description": "Adds two numbers.",
-  "module": "workflow.nodes.basic.math",
+  "module": "app.nodes.basic.math",
   "category": "basic",
   "init": {
     "inputs": []

@@ -202,6 +202,7 @@ let workflowSyncState = {};
 let localDraftTimer = null;
 const LOCAL_DRAFT_DEBOUNCE_MS = 500;
 let serverWorkflowItems = [];
+let tempWorkflowItems = [];
 let serverWorkflowListStatus = "idle";
 let currentWorkflowFileName = null;
 let lastFolderSavedAt = null;
@@ -1052,7 +1053,7 @@ function renderStudioContext() {
     ? "마지막 계정 정보는 유지하지만 재확인이 실패해 Marketplace 쓰기 기능을 잠갔습니다."
     : verified
     ? `${authState.user.displayName} 계정으로 Marketplace 소유권을 관리합니다.`
-    : "로그인하지 않아도 로컬 자동저장과 JSON 내보내기는 사용할 수 있습니다.";
+    : "로그인하지 않아도 로컬 자동저장과 저장 기능은 사용할 수 있습니다.";
   if (profile) profile.title = profileTitle;
   if (authorChip) authorChip.title = profileTitle;
   ["marketplacePackageAuthor", "workflowPackageAuthor"].forEach(id => {
@@ -1417,6 +1418,46 @@ function renderWorkflowList() {
   if (!root.children.length) root.innerHTML = `<div class="kv"><span>브라우저 초안을 준비하는 중입니다.</span></div>`;
   const toggle = document.getElementById("toggleWorkflowListBtn");
   if (toggle) toggle.classList.add("hidden");
+  renderTempWorkflowList();
+}
+
+function formatTempWorkflowTime(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "시간 미상";
+  return date.toLocaleString("ko-KR", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+}
+
+function renderTempWorkflowList() {
+  const panel = document.getElementById("tempWorkflowPanel");
+  const count = document.getElementById("tempWorkflowCount");
+  const toggle = document.getElementById("tempWorkflowToggleBtn");
+  const list = document.getElementById("tempWorkflowList");
+  if (!panel || !count || !toggle || !list) return;
+  const items = Array.isArray(tempWorkflowItems) ? tempWorkflowItems : [];
+  count.textContent = String(items.length);
+  panel.classList.toggle("has-items", items.length > 0);
+  if (!items.length) {
+    toggle.setAttribute("aria-expanded", "false");
+    list.classList.add("hidden");
+    list.innerHTML = `<div class="kv"><span>임시 보관된 작업본이 없습니다.</span></div>`;
+    return;
+  }
+  list.innerHTML = items.map(item => {
+    const fileName = item.fileName || "";
+    const displayName = String(item.name || fileName.split("/").pop() || "임시 작업본").replace(/\.json$/i, "");
+    const nodeCount = Number.isFinite(item.nodeCount) ? item.nodeCount : 0;
+    return `
+      <div class="temp-workflow-item">
+        <button class="nav-item temp-restore-main" type="button" onclick="restoreTempWorkflow(${inlineJson(fileName)})">
+          <b>${escapeHtml(displayName)}</b>
+          <span>저장 안 된 작업본 · ${nodeCount} nodes · ${escapeHtml(formatTempWorkflowTime(item.modifiedAt))}</span>
+        </button>
+        <button class="temp-delete-btn" type="button" title="임시 작업본 삭제" aria-label="임시 작업본 삭제" onclick="deleteTempWorkflow(${inlineJson(fileName)})">
+          <span class="material-symbols-outlined" aria-hidden="true">close</span>
+        </button>
+      </div>
+    `;
+  }).join("");
 }
 
 function renderServerWorkflowList() {
@@ -1440,16 +1481,17 @@ function renderServerWorkflowList() {
   serverWorkflowItems.forEach(item => {
     const fileName = item.fileName || item.name || String(item);
     const pkg = marketplacePackageForWorkflowFile(fileName);
+    const isCurrentAsset = currentWorkflowFileName === fileName || currentWorkflowFileName === `current/${fileName}`;
     const savedAt = item.modifiedAt ? new Date(item.modifiedAt) : null;
     const savedLabel = savedAt && !Number.isNaN(savedAt.getTime())
       ? savedAt.toLocaleString("ko-KR", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })
       : "수정 시각 미상";
     const openButton = document.createElement("button");
     openButton.type = "button";
-    openButton.className = `nav-item server-workflow-item ${fileName === currentWorkflowFileName ? "active" : ""}`;
+    openButton.className = `nav-item server-workflow-item ${isCurrentAsset ? "active" : ""}`;
     openButton.innerHTML = `<b>${escapeHtml(fileName.replace(/\.json$/i, ""))}</b><span>${escapeHtml(fileName)} · ${escapeHtml(savedLabel)}</span>`;
     openButton.title = "이 파일을 현재 브라우저 초안으로 열기";
-    openButton.addEventListener("click", () => loadServerWorkflow(fileName));
+    openButton.addEventListener("click", () => loadServerWorkflow(fileName, { activate: true }));
     if (serverWritesEnabled()) {
       const row = document.createElement("div");
       row.className = "asset-market-row";
@@ -1562,11 +1604,15 @@ function renderObjectList() {
     }
     const node = item.value;
     const missing = isNodeMissingFromCatalog(node);
+    const missingTitle = missing
+      ? "현재 PC의 catalog.json에서 확인되지 않은 노드입니다."
+      : "";
     return `
-      <button class="object-item ${node.id === selectedNodeId ? "active" : ""} ${missing ? "missing-node" : ""}" type="button" onclick="selectNodeFromList(${inlineJson(node.id)})">
-        <span class="object-kind">${missing ? "Missing" : "Node"}</span>
+      <button class="object-item ${node.id === selectedNodeId ? "active" : ""} ${missing ? "missing-node" : ""}" type="button" title="${escapeHtml(missingTitle)}" onclick="selectNodeFromList(${inlineJson(node.id)})">
+        <span class="object-kind">${missing ? "로컬 없음" : "Node"}</span>
         <b>${escapeHtml(displayNodeTitle(node))}</b>
-        <small>${escapeHtml(node.type)} #${node.id}${missing ? " · catalog 미확인" : ""}</small>
+        <small>${escapeHtml(node.type)} #${node.id}</small>
+        ${missing ? `<em class="object-missing-note">현재 PC에 설치된 노드 목록에 없음</em>` : ""}
       </button>
     `;
   }).join("") || `<div class="kv"><span>${
@@ -2180,7 +2226,7 @@ function renderPipelineToolRelease() {
   if (pipelineToolReleaseStatus === "error" || !pipelineToolRelease) {
     title.textContent = LOCAL_STUDIO_MODE ? "서버 없이 로컬 모드로 실행 중" : "GitHub에서 Pipeline Tool 받기";
     description.textContent = LOCAL_STUDIO_MODE
-      ? "Marketplace와 버전 확인만 잠시 사용할 수 없습니다. 편집, catalog 탐색, 파일 저장과 main.py 실행에는 영향이 없으며 GitHub 다운로드 링크는 계속 사용할 수 있습니다."
+      ? "Marketplace와 버전 확인만 잠시 사용할 수 없습니다. 편집, catalog 탐색, 저장과 main.py 실행에는 영향이 없으며 GitHub 다운로드 링크는 계속 사용할 수 있습니다."
       : "배포 파일은 중앙 서버가 아닌 GitHub Releases에서 직접 제공합니다.";
     meta.innerHTML = PIPELINE_TOOL_VERSION
       ? `<span>설치 버전 v${escapeHtml(PIPELINE_TOOL_VERSION)}</span><span>로컬 기능 정상</span>`
@@ -2302,8 +2348,9 @@ function openHostedMarketplace() {
     showToast("열 수 있는 HTTPS Marketplace 사이트 주소가 설정되지 않았습니다.");
     return false;
   }
-  const popup = window.open(siteUrl.toString(), "_blank", "noopener,noreferrer");
-  if (popup) popup.opener = null;
+  siteUrl.searchParams.set("returnTo", globalThis.location.href);
+  const popup = window.open(siteUrl.toString(), "infrax_marketplace");
+  if (popup) popup.focus?.();
   else showToast("브라우저에서 새 탭 열기를 허용해 주세요.");
   return Boolean(popup);
 }
@@ -2830,8 +2877,9 @@ function editRegisteredWorkflow(packageId) {
 async function openWorkflowFileMarketplaceAction(fileName) {
   if (!requireServerWriteAccess()) return;
   const pkg = marketplacePackageForWorkflowFile(fileName);
-  if (fileName && fileName !== currentWorkflowFileName) {
-    const loaded = await loadServerWorkflow(fileName);
+  const activeFileName = currentWorkflowFileName === fileName || currentWorkflowFileName === `current/${fileName}`;
+  if (fileName && !activeFileName) {
+    const loaded = await loadServerWorkflow(fileName, { activate: true });
     if (!loaded) return;
   }
   if (pkg?.canManage) {
@@ -4104,6 +4152,7 @@ function newProject() {
   redoStack = [];
   renderAll();
   markWorkflowDirty();
+  void syncServerWorkflows();
   fitView();
 }
 
@@ -4170,18 +4219,79 @@ function switchWorkflow(id, options = {}) {
   fitView();
 }
 
-function newWorkflow() {
+async function clearCurrentWorkflowFolder(options = {}) {
+  const archive = Boolean(options.archive);
+  const response = await localToolFetch(
+    "workflows/current/clear",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-InfraX-Archive-Current": archive ? "true" : "false",
+      },
+      body: "{}",
+    }
+  );
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok || !result.ok) {
+    throw new Error(result.error?.message || `HTTP ${response.status}`);
+  }
+  return true;
+}
+
+async function saveCurrentWorkflowDraftFile(fileName, workflow) {
+  const response = await localToolFetch(
+    `workflows/${encodeURIComponent(fileName)}`,
+    {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        "X-InfraX-Current-Only": "true",
+      },
+      body: JSON.stringify(workflow),
+    }
+  );
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok || !result.ok) {
+    throw new Error(result.error?.message || `HTTP ${response.status}`);
+  }
+  return result;
+}
+
+async function archiveDirtyCurrentWorkflowBeforeReplacement() {
+  if (!isWorkflowDirty) return false;
+  updateCurrentWorkflowStore();
+  if (!workflowShouldArchiveToTemp()) {
+    await clearCurrentWorkflowFolder({ archive: false });
+    return false;
+  }
+  const draftFileName = currentWorkflowFileName || currentWorkflowFileNameForName(currentWorkflowLabel());
+  await saveCurrentWorkflowDraftFile(draftFileName, exportWorkflowForDownload());
+  await clearCurrentWorkflowFolder({ archive: true });
+  return true;
+}
+
+async function newWorkflow() {
   if (!confirmUnsavedBeforeSwitch()) return;
   const name = prompt("새 워크플로우 이름", "new_workflow");
   if (!name) return;
   const id = `${name.toLowerCase().replace(/[^a-z0-9_가-힣-]+/g, "_")}_${Date.now()}`;
   const data = createBlankWorkflow();
+  const fileName = currentWorkflowFileNameForName(name);
+  try {
+    if (isWorkflowDirty) await archiveDirtyCurrentWorkflowBeforeReplacement();
+    else await clearCurrentWorkflowFolder({ archive: false });
+    await saveCurrentWorkflowDraftFile(fileName, data);
+  } catch (error) {
+    showToast(`새 워크플로우 파일 생성 실패: ${error.message || "로컬 파일 오류"}`);
+    return;
+  }
   currentProjectId = "local_tool";
   projectStore = [{ id: currentProjectId, name: "Local Tool" }];
   workflowStore = [{ id, name, projectId: currentProjectId, data }];
   currentWorkflowId = id;
   currentWorkflow = data;
-  currentWorkflowFileName = null;
+  currentWorkflowFileName = fileName;
   lastFolderSavedAt = null;
   lastFolderSavedHash = null;
   workflowSyncState = {};
@@ -4195,14 +4305,20 @@ function newWorkflow() {
   fitView();
 }
 
-function cloneWorkflow() {
-  if (!confirmUnsavedBeforeSwitch()) return;
-  const current = workflowStore.find(workflow => workflow.id === currentWorkflowId);
-  if (!current) return;
-  const name = prompt("복제할 워크플로우 이름", `${current.name}_copy`);
-  if (!name) return;
-  const id = `${name.toLowerCase().replace(/[^a-z0-9_가-힣-]+/g, "_")}_${Date.now()}`;
-  const data = structuredClone(currentWorkflow);
+async function resetCurrentWorkflow() {
+  if (!confirm("현재 편집 중인 워크플로우를 빈 화면으로 초기화할까요?\n저장하지 않은 변경은 브라우저 초안에서 제거됩니다.")) {
+    return;
+  }
+  try {
+    if (isWorkflowDirty) await archiveDirtyCurrentWorkflowBeforeReplacement();
+    else await clearCurrentWorkflowFolder({ archive: false });
+  } catch (error) {
+    showToast(`current 폴더 초기화 실패: ${error.message || "로컬 파일 오류"}`);
+    return;
+  }
+  const name = "untitled";
+  const id = `${safeId(name)}_${Date.now()}`;
+  const data = createBlankWorkflow();
   currentProjectId = "local_tool";
   projectStore = [{ id: currentProjectId, name: "Local Tool" }];
   workflowStore = [{ id, name, projectId: currentProjectId, data }];
@@ -4212,13 +4328,57 @@ function cloneWorkflow() {
   lastFolderSavedAt = null;
   lastFolderSavedHash = null;
   workflowSyncState = {};
+  workflowListCollapsed = true;
+  selectedNodeId = null;
+  selectedLinkId = null;
+  clearPendingLinkPort();
+  clearPendingLinkReconnect();
+  historyStack = [];
+  redoStack = [];
+  renderAll();
+  markWorkflowDirty();
+  persistLocalDraft({ immediate: true, silent: true });
+  void syncServerWorkflows();
+  fitView();
+  showToast("현재 워크플로우를 초기화했습니다. 저장을 누르면 workflows/list에 새 파일로 저장됩니다.");
+}
+
+async function cloneWorkflow() {
+  if (!confirmUnsavedBeforeSwitch()) return;
+  const current = workflowStore.find(workflow => workflow.id === currentWorkflowId);
+  if (!current) return;
+  const name = prompt("복제할 워크플로우 이름", `${current.name}_copy`);
+  if (!name) return;
+  const id = `${name.toLowerCase().replace(/[^a-z0-9_가-힣-]+/g, "_")}_${Date.now()}`;
+  const data = structuredClone(currentWorkflow);
+  const fileName = currentWorkflowFileNameForName(name);
+  try {
+    if (isWorkflowDirty) await archiveDirtyCurrentWorkflowBeforeReplacement();
+    else await clearCurrentWorkflowFolder({ archive: false });
+    await saveCurrentWorkflowDraftFile(fileName, data);
+  } catch (error) {
+    showToast(`복제 파일 생성 실패: ${error.message || "로컬 파일 오류"}`);
+    return;
+  }
+  currentProjectId = "local_tool";
+  projectStore = [{ id: currentProjectId, name: "Local Tool" }];
+  workflowStore = [{ id, name, projectId: currentProjectId, data }];
+  currentWorkflowId = id;
+  currentWorkflow = data;
+  currentWorkflowFileName = fileName;
+  lastFolderSavedAt = null;
+  lastFolderSavedHash = null;
+  workflowSyncState = {};
   historyStack = [];
   redoStack = [];
   selectedNodeId = null;
   selectedLinkId = null;
   renderAll();
   markWorkflowDirty();
+  persistLocalDraft({ immediate: true, silent: true });
+  void syncServerWorkflows();
   fitView();
+  showToast(`workflows/${fileName} 복제 작업본을 만들었습니다. 저장을 누르면 workflows/list에 확정됩니다.`);
 }
 
 function setSaveState(status, message) {
@@ -4249,13 +4409,18 @@ function formatSavedTime(value) {
   return date.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
 }
 
+function savedWorkflowDisplayName(fileName) {
+  const baseName = String(fileName || "").split("/").filter(Boolean).pop();
+  return baseName ? `list/${baseName}` : String(fileName || "");
+}
+
 function applyCurrentWorkflowSaveState() {
   const meta = currentWorkflowSyncMeta();
   isWorkflowDirty = Boolean(meta.dirty);
   if (meta.dirty) {
     setSaveState("dirty", meta.localDraftSavedAt ? "브라우저 자동저장됨 · 파일 미반영" : "브라우저 자동저장 대기");
   } else if (currentWorkflowFileName && (meta.lastFolderSavedAt || lastFolderSavedAt)) {
-    setSaveState("saved", `workflows/${currentWorkflowFileName} 저장됨 · ${formatSavedTime(meta.lastFolderSavedAt || lastFolderSavedAt)}`);
+    setSaveState("saved", `workflows/${savedWorkflowDisplayName(currentWorkflowFileName)} 저장됨 · ${formatSavedTime(meta.lastFolderSavedAt || lastFolderSavedAt)}`);
   } else {
     setSaveState("unknown", "브라우저 초안 · 아직 파일로 저장하지 않음");
   }
@@ -4281,7 +4446,7 @@ function clearWorkflowDirty(savedAt, _revision, hash, fileName, workflowId = cur
     isWorkflowDirty = false;
     lastFolderSavedAt = savedAt;
     lastFolderSavedHash = hash;
-    setSaveState("saved", `workflows/${currentWorkflowFileName} 저장됨 · ${formatSavedTime(savedAt)}`);
+    setSaveState("saved", `workflows/${savedWorkflowDisplayName(currentWorkflowFileName)} 저장됨 · ${formatSavedTime(savedAt)}`);
   }
 }
 
@@ -4392,7 +4557,7 @@ function persistLocalDraft(options = {}) {
       return false;
     }
     if (externalDraftConflict) {
-      setSaveState("error", "다른 탭 변경 감지 · JSON 내보내기 후 새로고침 필요");
+      setSaveState("error", "다른 탭 변경 감지 · JSON 보기에서 복사 후 새로고침 필요");
       return false;
     }
     const storageKey = CURRENT_DRAFT_STORAGE_KEY;
@@ -4403,8 +4568,8 @@ function persistLocalDraft(options = {}) {
       && currentEnvelope.revision > localDraftStorageRevision
     ) {
       externalDraftConflict = true;
-      setSaveState("error", "다른 탭 변경 감지 · JSON 내보내기 후 새로고침 필요");
-      if (!options.silent) showToast("다른 탭의 최신 초안을 덮지 않았습니다. 현재 JSON을 내보낸 뒤 새로고침해 주세요.");
+      setSaveState("error", "다른 탭 변경 감지 · JSON 보기에서 복사 후 새로고침 필요");
+      if (!options.silent) showToast("다른 탭의 최신 초안을 덮지 않았습니다. JSON 보기에서 현재 내용을 복사한 뒤 새로고침해 주세요.");
       return false;
     }
     const cachedAt = new Date().toISOString();
@@ -4451,6 +4616,17 @@ function hashSnapshot(value) {
   return `fnv1a-${(hash >>> 0).toString(16).padStart(8, "0")}`;
 }
 
+function workflowShouldArchiveToTemp() {
+  if (!isWorkflowDirty) return false;
+  const snapshot = exportWorkflowForDownload();
+  const hasGraphContent = Boolean(snapshot.nodes?.length || snapshot.links?.length);
+  if (!hasGraphContent) return false;
+  const currentHash = hashSnapshot(snapshot);
+  const meta = currentWorkflowSyncMeta();
+  const savedHash = meta.lastFolderSavedHash || lastFolderSavedHash;
+  return !savedHash || currentHash !== savedHash;
+}
+
 function suggestedWorkflowFileName() {
   const item = workflowStore.find(workflowItem => workflowItem.id === currentWorkflowId);
   const base = String(item?.name || currentWorkflowId || "workflow")
@@ -4461,14 +4637,31 @@ function suggestedWorkflowFileName() {
   return `${base}.json`;
 }
 
+function currentWorkflowFileNameForName(value) {
+  const base = String(value || "workflow")
+    .trim()
+    .replace(/[<>:"/\\|?*\u0000-\u001f]+/g, "_")
+    .replace(/[. ]+$/g, "")
+    || "workflow";
+  const fileName = /\.json$/i.test(base) ? base : `${base}.json`;
+  return `current/${fileName}`;
+}
+
 function validWorkflowFileName(value) {
   const name = String(value || "").trim();
+  const parts = name.split("/");
+  const scopedFolder = parts.length === 2 ? parts[0] : "";
+  const basename = parts.length === 2 && ["list", "current", "temp"].includes(scopedFolder) ? parts[1] : name;
   return Boolean(
     name
+    && (parts.length === 1 || (parts.length === 2 && ["list", "current", "temp"].includes(scopedFolder)))
+    && basename
     && /\.json$/i.test(name)
-    && !/[<>:"/\\|?*\u0000-\u001f]/.test(name)
-    && name !== "."
-    && name !== ".."
+    && !/[<>:"/\\|?*\u0000-\u001f]/.test(basename)
+    && basename !== "."
+    && basename !== ".."
+    && basename === basename.trim()
+    && !/[. ]$/.test(basename)
   );
 }
 
@@ -4481,6 +4674,7 @@ async function performWorkflowSave(options = {}) {
   }
   if (!fileName) return false;
   if (!/\.json$/i.test(fileName)) fileName += ".json";
+  if (!fileName.includes("/")) fileName = `current/${fileName}`;
   if (!validWorkflowFileName(fileName)) {
     showToast("파일명은 폴더 경로 없이 .json 확장자로 입력해 주세요.");
     return false;
@@ -4500,7 +4694,7 @@ async function performWorkflowSave(options = {}) {
   const savedAt = new Date().toISOString();
   const button = document.getElementById("saveWorkflowBtn");
   if (button) button.disabled = true;
-  setSaveState("saving", `workflows/${fileName} 저장 중...`);
+  setSaveState("saving", `workflows/${savedWorkflowDisplayName(fileName)} 저장 중...`);
   try {
     const sendSaveRequest = overwrite => localToolFetch(
       `workflows/${encodeURIComponent(fileName)}`,
@@ -4530,8 +4724,8 @@ async function performWorkflowSave(options = {}) {
       && response.status === 409
       && result.error?.code === "workflow_exists"
     ) {
-      if (!confirm(`workflows/${fileName} 파일이 이미 있습니다.\n기존 파일을 덮어쓸까요?`)) {
-        setSaveState("dirty", "브라우저 자동저장됨 · 파일 저장 취소");
+      if (!confirm(`workflows/${savedWorkflowDisplayName(fileName)} 파일이 이미 있습니다.\n기존 파일을 덮어쓸까요?`)) {
+        setSaveState("dirty", "브라우저 자동저장됨 · 저장 취소");
         return false;
       }
       response = await sendSaveRequest(true);
@@ -4558,25 +4752,25 @@ async function performWorkflowSave(options = {}) {
       isWorkflowDirty = true;
       lastFolderSavedAt = savedAt;
       lastFolderSavedHash = requestedHash;
-      setSaveState("dirty", "이전 편집본 파일 저장됨 · 이후 변경은 브라우저에만 있음");
+      setSaveState("dirty", "이전 편집본 저장됨 · 이후 변경은 브라우저에만 있음");
     }
     persistLocalDraft({ immediate: true, silent: true });
     await syncServerWorkflows();
     if (!requestStillCurrent()) return false;
     renderAll();
-    if (!options.silent) showToast(`workflows/${currentWorkflowFileName} 저장 완료`);
+    if (!options.silent) showToast(`workflows/${savedWorkflowDisplayName(currentWorkflowFileName)} 저장 완료`);
     return true;
   } catch (error) {
     if (!requestStillCurrent()) return false;
     isWorkflowDirty = true;
     currentWorkflowSyncMeta().dirty = true;
-    setSaveState("error", "파일 저장 실패 · 브라우저 초안 유지");
+    setSaveState("error", "저장 실패 · 브라우저 초안 유지");
     persistLocalDraft({ immediate: true, silent: true });
     if (!options.silent) {
       showToast(
         LOCAL_STUDIO_MODE
-          ? `파일 저장 실패: ${error.message || "workflows 폴더 쓰기 오류"}`
-          : `파일 저장 실패: ${error.message || "로컬 툴 연결 오류"} · 연결 토큰과 studio_bridge.py를 확인해 주세요.`
+          ? `저장 실패: ${error.message || "workflows 폴더 쓰기 오류"}`
+          : `저장 실패: ${error.message || "로컬 툴 연결 오류"} · 연결 토큰과 studio_bridge.py를 확인해 주세요.`
       );
     }
     return false;
@@ -4618,7 +4812,9 @@ async function syncServerWorkflows(options = {}) {
       );
     }
     serverWorkflowItems = result.workflows;
+    tempWorkflowItems = Array.isArray(result.tempWorkflows) ? result.tempWorkflows : [];
     serverWorkflowListStatus = "ready";
+    renderWorkflowList();
     renderServerWorkflowList();
     renderStudioContext();
     return true;
@@ -4628,6 +4824,8 @@ async function syncServerWorkflows(options = {}) {
       || !isCurrentLocalToolContext(requestContext)
     ) return null;
     serverWorkflowListStatus = "error";
+    tempWorkflowItems = [];
+    renderWorkflowList();
     renderServerWorkflowList();
     renderStudioContext();
     if (options.notify) {
@@ -4641,12 +4839,54 @@ async function syncServerWorkflows(options = {}) {
   }
 }
 
-async function loadServerWorkflow(fileName) {
+function applyLoadedWorkflowResult(result, fallbackFileName) {
+  const snapshot = structuredClone(result.workflow);
+  normalizeWorkflowShape(snapshot);
+  rebuildImportedLinkRefs(snapshot);
+  const loadedFileName = result.fileName || fallbackFileName;
+  const name = loadedFileName.split("/").pop().replace(/\.json$/i, "");
+  const id = `${safeId(name) || "workflow"}_current`;
+  currentWorkflowId = id;
+  currentWorkflow = snapshot;
+  currentWorkflowFileName = loadedFileName;
+  projectStore = [{ id: "local_tool", name: "Local Tool" }];
+  currentProjectId = "local_tool";
+  workflowStore = [{ id, name, projectId: currentProjectId, data: snapshot }];
+  historyStack = [];
+  redoStack = [];
+  selectedNodeId = null;
+  selectedLinkId = null;
+  workflowSyncState = {};
+  const savedHash = hashSnapshot(exportWorkflowForDownload());
+  clearWorkflowDirty(new Date().toISOString(), null, savedHash, loadedFileName);
+  persistLocalDraft({ immediate: true, silent: true });
+  renderAll();
+  fitView();
+  return loadedFileName;
+}
+
+async function loadServerWorkflow(fileName, options = {}) {
   if (!fileName) return false;
+  if (!confirmUnsavedBeforeSwitch()) return false;
   const requestId = ++localToolWorkflowLoadSequence;
   const requestContext = captureLocalToolContext();
   try {
-    const response = await localToolFetch(`workflows/${encodeURIComponent(fileName)}`);
+    if (isWorkflowDirty) await archiveDirtyCurrentWorkflowBeforeReplacement();
+    const response = await localToolFetch(
+      options.activate
+        ? `workflows/${encodeURIComponent(fileName)}/activate`
+        : `workflows/${encodeURIComponent(fileName)}`,
+      options.activate
+        ? {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-InfraX-Archive-Current": "false",
+            },
+            body: "{}",
+          }
+        : undefined
+    );
     const result = await response.json().catch(() => ({}));
     if (
       requestId !== localToolWorkflowLoadSequence
@@ -4659,29 +4899,8 @@ async function loadServerWorkflow(fileName) {
           : result.error?.message || `HTTP ${response.status}`
       );
     }
-    if (!confirmUnsavedBeforeSwitch()) return false;
-    const snapshot = structuredClone(result.workflow);
-    normalizeWorkflowShape(snapshot);
-    rebuildImportedLinkRefs(snapshot);
-    const loadedFileName = result.fileName || fileName;
-    const name = loadedFileName.replace(/\.json$/i, "");
-    const id = `${safeId(name) || "workflow"}_current`;
-    currentWorkflowId = id;
-    currentWorkflow = snapshot;
-    currentWorkflowFileName = loadedFileName;
-    projectStore = [{ id: "local_tool", name: "Local Tool" }];
-    currentProjectId = "local_tool";
-    workflowStore = [{ id, name, projectId: currentProjectId, data: snapshot }];
-    historyStack = [];
-    redoStack = [];
-    selectedNodeId = null;
-    selectedLinkId = null;
-    workflowSyncState = {};
-    const savedHash = hashSnapshot(exportWorkflowForDownload());
-    clearWorkflowDirty(new Date().toISOString(), null, savedHash, loadedFileName);
-    persistLocalDraft({ immediate: true, silent: true });
-    renderAll();
-    fitView();
+    const loadedFileName = applyLoadedWorkflowResult(result, fileName);
+    await syncServerWorkflows();
     showToast(`workflows/${loadedFileName} 파일을 열었습니다.`);
     return true;
   } catch (error) {
@@ -4698,6 +4917,63 @@ async function loadServerWorkflow(fileName) {
 
 window.syncServerWorkflows = syncServerWorkflows;
 window.loadServerWorkflow = loadServerWorkflow;
+
+async function restoreTempWorkflow(fileName) {
+  if (!fileName) return false;
+  if (!confirmUnsavedBeforeSwitch()) return false;
+  const requestContext = captureLocalToolContext();
+  try {
+    if (isWorkflowDirty) await archiveDirtyCurrentWorkflowBeforeReplacement();
+    const response = await localToolFetch(
+      `workflows/${encodeURIComponent(fileName)}/restore`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      }
+    );
+    const result = await response.json().catch(() => ({}));
+    if (!isCurrentLocalToolContext(requestContext)) return false;
+    if (!response.ok || !result.ok) {
+      throw new Error(result.error?.message || `HTTP ${response.status}`);
+    }
+    const loadedFileName = applyLoadedWorkflowResult(result, fileName);
+    await syncServerWorkflows();
+    showToast(`임시 보관함에서 workflows/${loadedFileName} 작업본을 복원했습니다.`);
+    return true;
+  } catch (error) {
+    showToast(`임시 작업본 복원 실패: ${error.message || "로컬 파일 오류"}`);
+    return false;
+  }
+}
+
+async function deleteTempWorkflow(fileName) {
+  if (!fileName) return false;
+  if (!confirm("이 임시 작업본을 삭제할까요?")) return false;
+  try {
+    const response = await localToolFetch(
+      `workflows/${encodeURIComponent(fileName)}/delete`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      }
+    );
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || !result.ok) {
+      throw new Error(result.error?.message || `HTTP ${response.status}`);
+    }
+    await syncServerWorkflows();
+    showToast("임시 작업본을 삭제했습니다.");
+    return true;
+  } catch (error) {
+    showToast(`임시 작업본 삭제 실패: ${error.message || "로컬 파일 오류"}`);
+    return false;
+  }
+}
+
+window.restoreTempWorkflow = restoreTempWorkflow;
+window.deleteTempWorkflow = deleteTempWorkflow;
 
 function applyAuxiliaryState(state = {}) {
   if (Array.isArray(state.registeredMarketplacePackages)) {
@@ -4844,7 +5120,7 @@ function restoreState() {
     const corruptedValue = draftFailed ? raw : auxiliaryRaw;
     const backupKey = preserveCorruptedLocalStorageValue(storageKey, corruptedValue);
     if (draftFailed && corruptedValue && !backupKey) {
-      localDraftWriteBlockedReason = "손상된 브라우저 초안을 보존하기 위해 자동저장을 중지했습니다. JSON 내보내기 후 저장소를 정리해 주세요.";
+      localDraftWriteBlockedReason = "손상된 브라우저 초안을 보존하기 위해 자동저장을 중지했습니다. JSON 보기에서 내용을 복사한 뒤 저장소를 정리해 주세요.";
     }
     if (!draftFailed) auxiliaryPersistFailed = !backupKey;
     return {
@@ -6070,6 +6346,7 @@ document.getElementById("closeMarketplaceBtn").addEventListener("click", closeMa
 document.getElementById("downloadPipelineToolBtn")?.addEventListener("click", downloadLatestPipelineTool);
 document.getElementById("connectPlatformAccountBtn")?.addEventListener("click", handlePlatformAccountConnect);
 document.getElementById("logoutPlatformAccountBtn")?.addEventListener("click", logoutPlatformAccount);
+document.getElementById("resetWorkflowBtn")?.addEventListener("click", resetCurrentWorkflow);
 document.getElementById("saveWorkflowBtn")?.addEventListener("click", saveWorkflowToServer);
 document.getElementById("runWorkflowBtn")?.addEventListener("click", runLocalWorkflow);
 document.getElementById("closeRunOutputBtn")?.addEventListener("click", () => {
@@ -6127,6 +6404,14 @@ document.getElementById("addNodeBtn").addEventListener("click", () => {
 document.getElementById("newWorkflowBtn").addEventListener("click", newWorkflow);
 document.getElementById("cloneWorkflowBtn").addEventListener("click", cloneWorkflow);
 document.getElementById("toggleWorkflowListBtn").addEventListener("click", toggleWorkflowListMode);
+document.getElementById("tempWorkflowToggleBtn")?.addEventListener("click", event => {
+  const button = event.currentTarget;
+  const list = document.getElementById("tempWorkflowList");
+  if (!list || !tempWorkflowItems.length) return;
+  const expanded = button.getAttribute("aria-expanded") === "true";
+  button.setAttribute("aria-expanded", expanded ? "false" : "true");
+  list.classList.toggle("hidden", expanded);
+});
 document.getElementById("newProjectBtn").addEventListener("click", newProject);
 document.getElementById("cloneProjectBtn").addEventListener("click", cloneProject);
 document.getElementById("projectSelect").addEventListener("change", event => switchProject(event.target.value));
@@ -6197,12 +6482,6 @@ document.getElementById("jsonBtn").addEventListener("click", () => {
   jsonInput.classList.toggle("hidden", !willShow);
   jsonHint.classList.toggle("hidden", willShow);
 });
-document.getElementById("downloadBtn").addEventListener("click", () => {
-  const filename = `${safeId(currentWorkflowLabel())}.workflow.json`;
-  downloadBlob(filename, JSON.stringify(exportWorkflowForDownload(), null, 2));
-  showToast(`${filename} 다운로드를 시작했습니다.`);
-});
-
 canvasShell.addEventListener("click", event => {
   if (event.target === canvasShell || event.target === world || event.target === nodeLayer || event.target === linksSvg) {
     clearPendingLinkPort();
@@ -6399,8 +6678,8 @@ window.addEventListener("storage", event => {
       return;
     }
     externalDraftConflict = true;
-    setSaveState("error", "다른 탭 변경 감지 · JSON 내보내기 후 새로고침 필요");
-    showToast("다른 탭의 최신 초안을 감지했습니다. 현재 JSON을 내보낸 뒤 새로고침해 주세요.");
+    setSaveState("error", "다른 탭 변경 감지 · JSON 보기에서 복사 후 새로고침 필요");
+    showToast("다른 탭의 최신 초안을 감지했습니다. JSON 보기에서 현재 내용을 복사한 뒤 새로고침해 주세요.");
   } else {
     if (
       incomingEnvelope.writerId
