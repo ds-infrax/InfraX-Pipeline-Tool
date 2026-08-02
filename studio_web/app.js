@@ -230,6 +230,9 @@ let hostedLocalConnectRequest = null;
 function initializeLocalStudioMode() {
   document.documentElement.classList.toggle("local-studio-mode", LOCAL_STUDIO_MODE);
   document.documentElement.classList.toggle("hosted-platform-mode", !LOCAL_STUDIO_MODE);
+  if (LOCAL_STUDIO_MODE) {
+    globalThis.name = "infrax_studio";
+  }
   document.querySelectorAll("[data-local-studio-only]").forEach(element => {
     element.hidden = !LOCAL_STUDIO_MODE;
   });
