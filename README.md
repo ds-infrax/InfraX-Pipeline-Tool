@@ -9,8 +9,8 @@ git clone InfraX-Pipeline-Tool
 cd InfraX-Pipeline-Tool/custom_nodes
 git clone <custom-node-repo>
 cd ..
-python main.py workflows/list/sample_custom.json
-python catalog.py
+python-3.10.0-embed-amd64\python.exe main.py workflows/list/sample_custom.json
+python-3.10.0-embed-amd64\python.exe catalog.py
 ```
 
 This repo contains the runtime, built-in nodes, and a `custom_nodes/` folder where each project can live as its own git repo.
@@ -68,8 +68,8 @@ Editable install is convenient while developing nodes and runtime code.
 You can also run directly from the repo root without installing while developing:
 
 ```powershell
-python main.py workflows/list/sample_custom.json
-python catalog.py
+python-3.10.0-embed-amd64\python.exe main.py workflows/list/sample_custom.json
+python-3.10.0-embed-amd64\python.exe catalog.py
 ```
 
 ## Start the Local Workflow Studio
@@ -96,14 +96,13 @@ run_studio.bat
 
 The launcher uses Python in this order:
 
-1. `python_embeded\python.exe` (portable bundle)
-2. `.venv\Scripts\python.exe` (development virtual environment)
+1. `python-3.10.0-embed-amd64\python.exe` (portable bundle)
 3. `python` available on `PATH`
 
 You can also start it from PowerShell:
 
 ```powershell
-python studio_bridge.py
+python-3.10.0-embed-amd64\python.exe studio_bridge.py
 ```
 
 The process listens only on `http://127.0.0.1:8765` and opens that address in
@@ -136,7 +135,7 @@ opening and editing workflows does not depend on a font CDN.
 
 ### Startup options
 
-Pass options after `run_studio.bat`, or after `python studio_bridge.py`:
+Pass options after `run_studio.bat`, or after `python-3.10.0-embed-amd64\python.exe studio_bridge.py`:
 
 ```powershell
 # Start without opening a browser tab
@@ -423,7 +422,7 @@ Node keys are stable because the scan roots do not change. For example,
 ## Run A Workflow
 
 ```powershell
-python main.py workflows/list/sample_a+b=c.json
+python-3.10.0-embed-amd64\python.exe main.py workflows/list/sample_a+b=c.json
 ```
 
 `main.py` validates the workflow passed on the command line, executes it, and
@@ -438,7 +437,7 @@ Current example:
 ## Generate Catalog
 
 ```powershell
-python catalog.py
+python-3.10.0-embed-amd64\python.exe catalog.py
 ```
 
 This writes `catalog.json` and prints the same catalog to the terminal.

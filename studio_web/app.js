@@ -64,7 +64,7 @@ const scriptLibrary = [
     developer: "system",
     version: "1.0",
     status: "stable",
-    command: "python scripts/input/input_int.py",
+    command: "python-3.10.0-embed-amd64\\python.exe scripts/input/input_int.py",
     path: "scripts/input/input_int.py",
     inputs: [],
     outputs: [{ name: "INT", type: "INT" }]
@@ -76,7 +76,7 @@ const scriptLibrary = [
     developer: "kim",
     version: "1.0",
     status: "stable",
-    command: "python scripts/math/add.py",
+    command: "python-3.10.0-embed-amd64\\python.exe scripts/math/add.py",
     path: "scripts/math/add.py",
     inputs: [{ name: "a", type: "INT" }, { name: "b", type: "INT" }],
     outputs: [{ name: "INT", type: "INT" }]
@@ -88,7 +88,7 @@ const scriptLibrary = [
     developer: "park",
     version: "2.0",
     status: "experimental",
-    command: "python scripts/math/add_fast.py",
+    command: "python-3.10.0-embed-amd64\\python.exe scripts/math/add_fast.py",
     path: "scripts/math/add_fast.py",
     inputs: [{ name: "a", type: "INT" }, { name: "b", type: "INT" }],
     outputs: [{ name: "INT", type: "INT" }]
@@ -100,7 +100,7 @@ const scriptLibrary = [
     developer: "lee",
     version: "1.0",
     status: "warning",
-    command: "python scripts/math/add_three.py",
+    command: "python-3.10.0-embed-amd64\\python.exe scripts/math/add_three.py",
     path: "scripts/math/add_three.py",
     inputs: [{ name: "a", type: "INT" }, { name: "b", type: "INT" }, { name: "c", type: "INT" }],
     outputs: [{ name: "INT", type: "INT" }]
@@ -112,7 +112,7 @@ const scriptLibrary = [
     developer: "system",
     version: "1.0",
     status: "stable",
-    command: "python scripts/output/print.py",
+    command: "python-3.10.0-embed-amd64\\python.exe scripts/output/print.py",
     path: "scripts/output/print.py",
     inputs: [{ name: "source", type: "*" }],
     outputs: []
@@ -1350,7 +1350,7 @@ function openMarketplaceForMissingNode(nodeId) {
   });
   showToast(candidate
     ? `${node.type}을 제공하는 ${candidate.name} 다운로드 항목으로 이동했습니다.`
-    : `${node.type} 제공 정보가 등록된 항목은 없습니다. Model / Module 목록에서 확인해 주세요.`);
+    : `${node.type} 제공 정보가 등록된 항목은 없습니다. Node 목록에서 확인해 주세요.`);
 }
 
 window.openMarketplaceForMissingNode = openMarketplaceForMissingNode;
@@ -1485,7 +1485,7 @@ function renderServerWorkflowList() {
   if (serverWorkflowListStatus === "error") {
     root.innerHTML = LOCAL_STUDIO_MODE
       ? `<div class="kv"><span>workflows 폴더를 읽지 못했습니다. 다시 조회해 주세요.</span></div>`
-      : `<div class="kv"><span>로컬 툴에 연결하지 못했습니다. <code>python studio_bridge.py</code> 실행 후 다시 조회하세요.</span></div>`;
+      : `<div class="kv"><span>로컬 툴에 연결하지 못했습니다. <code>python-3.10.0-embed-amd64\\python.exe studio_bridge.py</code> 실행 후 다시 조회하세요.</span></div>`;
     return;
   }
   if (!serverWorkflowItems.length) {
@@ -1791,7 +1791,7 @@ async function refreshLocalExplorer(options = {}) {
       showToast(
         LOCAL_STUDIO_MODE
           ? `노드 목록 새로고침 실패: ${error.message || "조회 오류"}`
-          : `로컬 툴 연결 실패: ${error.message || "연결 오류"} · python studio_bridge.py를 실행해 주세요.`
+          : `로컬 툴 연결 실패: ${error.message || "연결 오류"} · python-3.10.0-embed-amd64\\python.exe studio_bridge.py를 실행해 주세요.`
       );
     }
     return false;
@@ -2004,6 +2004,22 @@ function applyLocalPublishablePackageSelection() {
   renderMarketplaceNodeSelection();
 }
 
+function isPackageMarketplaceTab(tab) {
+  return tab === "module" || tab === "model";
+}
+
+function marketplaceTargetLabel(tab) {
+  if (tab === "workspace") return "워크플로우";
+  if (tab === "model") return "모델";
+  return "노드";
+}
+
+function marketplacePackageKindForTab(tab) {
+  if (tab === "model") return "model-pack";
+  if (tab === "module") return "node-pack";
+  return "workflow-bundle";
+}
+
 function renderMarketplace() {
   const root = document.getElementById("marketplaceList");
   if (!root) return;
@@ -2015,28 +2031,34 @@ function renderMarketplace() {
     button.setAttribute("aria-selected", String(active));
   });
   const registerPanel = document.getElementById("marketplaceRegisterPanel");
-  registerPanel?.classList.toggle("hidden", marketplaceTab !== "module" || !moduleRegisterOpen);
-  if (registerPanel) registerPanel.open = marketplaceTab === "module" && moduleRegisterOpen;
+  registerPanel?.classList.toggle("hidden", !isPackageMarketplaceTab(marketplaceTab) || !moduleRegisterOpen);
+  if (registerPanel) registerPanel.open = isPackageMarketplaceTab(marketplaceTab) && moduleRegisterOpen;
   renderMarketplaceNodeSelection();
   const moduleRegisterButton = document.getElementById("openModuleRegisterBtn");
   moduleRegisterButton?.classList.toggle(
     "hidden",
-    marketplaceTab !== "module" || !serverWritesEnabled()
+    !isPackageMarketplaceTab(marketplaceTab) || !serverWritesEnabled()
   );
+  if (moduleRegisterButton) {
+    moduleRegisterButton.innerHTML = `<span class="material-symbols-outlined">add</span>${escapeHtml(marketplaceTargetLabel(marketplaceTab))} 등록`;
+  }
   const sectionTitle = document.getElementById("marketplaceSectionTitle");
-  if (sectionTitle) sectionTitle.textContent = marketplaceTab === "workspace" ? "등록된 워크플로우" : "모델 / 모듈";
+  if (sectionTitle) sectionTitle.textContent = marketplaceTab === "workspace" ? "등록된 워크플로우" : marketplaceTargetLabel(marketplaceTab);
   const allMarketplacePackages = [...registeredMarketplacePackages, ...marketplacePackages];
   const visiblePackages = allMarketplacePackages.filter(pkg => {
     const isWorkspace = pkg.kind === "workflow-bundle" || Boolean(pkg.workflow);
-    return marketplaceTab === "workspace" ? isWorkspace : !isWorkspace;
+    if (marketplaceTab === "workspace") return isWorkspace;
+    return !isWorkspace && pkg.kind === marketplacePackageKindForTab(marketplaceTab);
   });
   if (summary) {
     summary.textContent = marketplaceTab === "workspace"
       ? "별도 실행기에서 테스트 완료한 JSON 스냅샷을 공유 Marketplace 서버에서 관리합니다."
-      : "PC에 다운로드한 뒤 자동 탐색기가 발견해야 Editor의 내 PC 라이브러리에 표시됩니다.";
+      : marketplaceTab === "model"
+        ? "PC에 다운로드한 모델 파일과 가중치를 워크플로우 실행에 사용할 수 있습니다."
+        : "PC에 다운로드한 뒤 자동 탐색기가 발견해야 Editor의 내 PC 라이브러리에 표시됩니다.";
   }
   if (!visiblePackages.length) {
-    root.innerHTML = `<div class="marketplace-empty">등록된 ${marketplaceTab === "workspace" ? "워크스페이스" : "모듈"}이 없습니다.</div>`;
+    root.innerHTML = `<div class="marketplace-empty">등록된 ${marketplaceTargetLabel(marketplaceTab)}이 없습니다.</div>`;
     return;
   }
   root.innerHTML = visiblePackages.map(pkg => {
@@ -2084,11 +2106,11 @@ function renderMarketplace() {
       `;
     }
     const packagePresent = isMarketplacePackageInstalled(pkg);
-    const downloadRequested = marketplaceTab === "module" && packagePresent;
+    const downloadRequested = isPackageMarketplaceTab(marketplaceTab) && packagePresent;
     const installed = marketplaceTab === "workspace" && packagePresent;
     const scriptCount = pkg.scripts?.length || 0;
     const workflowLabel = pkg.workflow ? "workspace bundle" : "module package";
-    const primaryLabel = marketplaceTab === "module"
+    const primaryLabel = isPackageMarketplaceTab(marketplaceTab)
       ? (LOCAL_STUDIO_MODE
           ? (downloadRequested ? "이 PC에 다시 설치" : "이 PC에 설치")
           : "ZIP 다운로드")
@@ -2102,9 +2124,9 @@ function renderMarketplace() {
         </div>
         <small>${escapeHtml(pkg.description)}</small>
         ${recommendedForNode ? `<div class="marketplace-match-note">${escapeHtml(marketplaceFocusNodeType)} 노드를 제공하는 항목입니다.</div>` : ""}
-        ${marketplaceTab === "module" ? `<div class="marketplace-registration-note">${downloadRequested ? "이 PC에 설치됨 · 노드 목록에 자동 반영" : LOCAL_STUDIO_MODE ? "설치 후 catalog를 자동 갱신합니다." : "다운로드 후 로컬 Pipeline Tool에서 설치할 수 있습니다."}</div>` : ""}
+        ${isPackageMarketplaceTab(marketplaceTab) ? `<div class="marketplace-registration-note">${downloadRequested ? `이 PC에 설치됨 · ${marketplaceTargetLabel(marketplaceTab)} 목록에 자동 반영` : LOCAL_STUDIO_MODE ? "설치 후 catalog를 자동 갱신합니다." : "다운로드 후 로컬 Pipeline Tool에서 설치할 수 있습니다."}</div>` : ""}
         <div class="mini-actions">
-          <button class="btn light" type="button" onclick="${marketplaceTab === "module" ? "downloadMarketplacePackage" : "installMarketplacePackage"}(${inlineJson(pkg.id)}${marketplaceTab === "workspace" && installed ? ", true" : ""})">${primaryLabel}</button>
+          <button class="btn light" type="button" onclick="${isPackageMarketplaceTab(marketplaceTab) ? "downloadMarketplacePackage" : "installMarketplacePackage"}(${inlineJson(pkg.id)}${marketplaceTab === "workspace" && installed ? ", true" : ""})">${primaryLabel}</button>
           ${pkg.workflow && !installed ? `<button class="btn light" type="button" onclick="installMarketplacePackage(${inlineJson(pkg.id)}, true)">${openLabel}</button>` : ""}
         </div>
       </div>
@@ -2955,7 +2977,7 @@ function editRegisteredPackage(packageId) {
   renderMarketplace();
   const title = document.getElementById("marketplaceRegisterTitle");
   const submitLabel = document.getElementById("marketplaceRegisterSubmitLabel");
-  if (title) title.textContent = "모델 / 모듈 수정";
+  if (title) title.textContent = `${pkg.kind === "model-pack" ? "모델" : "노드"} 수정`;
   if (submitLabel) submitLabel.textContent = "서버 등록 수정";
   requestAnimationFrame(() => form.elements.name.focus());
 }
@@ -3229,7 +3251,7 @@ async function registerMarketplacePackage(event) {
     ];
     localAuthorProfile = savedPackage.author || author;
     editingModulePackageId = null;
-    marketplaceTab = "module";
+    marketplaceTab = savedPackage.kind === "model-pack" ? "model" : "module";
     moduleRegisterOpen = false;
     persistAuxiliaryState();
     form.reset();
@@ -3241,20 +3263,21 @@ async function registerMarketplacePackage(event) {
     showToast(`${name} 패키지를 Marketplace 서버에 저장했습니다.`);
   } catch (saveError) {
     if (error) error.textContent = `서버 등록 실패: ${saveError.message || "연결 오류"}`;
-    showToast(`모델 / 모듈 등록 실패: ${saveError.message || "서버 연결 오류"}`);
+    showToast(`${marketplaceTargetLabel(marketplaceTab)} 등록 실패: ${saveError.message || "서버 연결 오류"}`);
   } finally {
     if (submitButton) submitButton.disabled = !serverWritesEnabled();
   }
 }
 
 function setMarketplaceTab(tab) {
-  marketplaceTab = tab === "module" ? "module" : "workspace";
+  marketplaceTab = ["module", "model"].includes(tab) ? tab : "workspace";
   moduleRegisterOpen = false;
   editingModulePackageId = null;
   renderMarketplace();
 }
 
-function openMarketplaceView() {
+function openMarketplaceView(options = {}) {
+  if (options.fullList) marketplaceListExpanded = true;
   renderStudioContext();
   renderMarketplace();
   renderPipelineToolRelease();
@@ -5356,7 +5379,7 @@ function fillScriptModalDefaults(selectedNode = currentWorkflow.nodes.find(node 
   document.getElementById("scriptDeveloperInput").value = "user";
   document.getElementById("scriptVersionInput").value = "1.0";
   document.getElementById("scriptStatusInput").value = "experimental";
-  document.getElementById("scriptCommandInput").value = selectedNode ? `python scripts/${selectedNode.type.toLowerCase()}.py` : "python scripts/math/add.py";
+  document.getElementById("scriptCommandInput").value = selectedNode ? `python-3.10.0-embed-amd64\\python.exe scripts/${selectedNode.type.toLowerCase()}.py` : "python-3.10.0-embed-amd64\\python.exe scripts/math/add.py";
   modalPorts.inputs = structuredClone(selectedNode?.inputs?.map(({ name, type }) => ({ name, type })) || [{ name: "a", type: "INT" }, { name: "b", type: "INT" }]);
   modalPorts.outputs = structuredClone(selectedNode?.outputs?.map(({ name, type }) => ({ name, type })) || [{ name: "INT", type: "INT" }]);
   document.getElementById("scriptInputNameInput").value = "";
@@ -5939,7 +5962,7 @@ async function runLocalWorkflow() {
     requestWorkflowObject = currentWorkflow;
     requestFileName = currentWorkflowFileName;
     markWorkflowRunQueued();
-    showRunOutput(`${requestFileName} 실행 중`, "python main.py workflows/... 실행을 기다리는 중입니다.\n");
+    showRunOutput(`${requestFileName} 실행 중`, "python-3.10.0-embed-amd64\\python.exe main.py workflows/... 실행을 기다리는 중입니다.\n");
     const response = await localToolFetch(
       `workflows/${encodeURIComponent(requestFileName)}/run-stream`,
       {
@@ -6097,7 +6120,8 @@ function resetMarketplaceRegisterForm() {
   const title = document.getElementById("marketplaceRegisterTitle");
   const submitLabel = document.getElementById("marketplaceRegisterSubmitLabel");
   const error = document.getElementById("marketplaceRegisterError");
-  if (title) title.textContent = "모델 / 모듈 등록";
+  if (form?.elements.kind) form.elements.kind.value = marketplacePackageKindForTab(marketplaceTab) === "model-pack" ? "model-pack" : "node-pack";
+  if (title) title.textContent = `${marketplaceTargetLabel(marketplaceTab)} 등록`;
   if (submitLabel) submitLabel.textContent = "Marketplace 서버에 등록";
   if (error) error.textContent = "";
   syncMarketplaceSourceFields();
@@ -6311,7 +6335,7 @@ async function syncMarketplaceModulesFromServer(options = {}) {
     return true;
   } catch (syncError) {
     if (!isCurrentRequest()) return null;
-    if (options.notify) showToast(`모델 / 모듈 Marketplace 동기화 실패: ${syncError.message || "서버 연결 오류"}`);
+    if (options.notify) showToast(`노드/모델 Marketplace 동기화 실패: ${syncError.message || "서버 연결 오류"}`);
     return false;
   }
 }
@@ -6324,7 +6348,7 @@ async function syncMarketplaceFromServer(options = {}) {
   if (options.notify && (workflowsReady === false || modulesReady === false)) {
     const failed = [
       workflowsReady === false && "워크플로우",
-      modulesReady === false && "모델 / 모듈"
+      modulesReady === false && "노드/모델"
     ].filter(Boolean).join(", ");
     showToast(`Marketplace 일부 동기화 실패: ${failed}`);
   }
@@ -6589,7 +6613,7 @@ function exportWorkflowForDownload() {
 
 document.getElementById("undoBtn").addEventListener("click", undo);
 document.getElementById("redoBtn").addEventListener("click", redo);
-document.getElementById("marketplaceBtn").addEventListener("click", openHostedMarketplace);
+document.getElementById("marketplaceBtn").addEventListener("click", () => openMarketplaceView({ fullList: true }));
 document.getElementById("closeMarketplaceBtn").addEventListener("click", closeMarketplaceView);
 document.getElementById("downloadPipelineToolBtn")?.addEventListener("click", downloadLatestPipelineTool);
 document.getElementById("connectPlatformAccountBtn")?.addEventListener("click", handlePlatformAccountConnect);

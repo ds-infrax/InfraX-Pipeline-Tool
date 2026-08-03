@@ -72,7 +72,7 @@
             <span class="material-symbols-outlined">folder_open</span>
             <span>파일</span>
           </button>
-          <button class="rail-button" id="marketplaceBtn" type="button" title="운영 Marketplace 열기">
+          <button class="rail-button" id="marketplaceBtn" type="button" title="등록된 Marketplace 목록 보기">
             <span class="material-symbols-outlined">storefront</span>
             <span>마켓</span>
           </button>
@@ -493,8 +493,15 @@
         <button class="marketplace-tab" type="button" data-marketplace-tab="module" role="tab" aria-selected="false">
           <span class="material-symbols-outlined">deployed_code</span>
           <span>
-            <b>Model / Module</b>
+            <b>Node</b>
             <small>Git 또는 ZIP 소스</small>
+          </span>
+        </button>
+        <button class="marketplace-tab" type="button" data-marketplace-tab="model" role="tab" aria-selected="false" aria-controls="marketplaceList" tabindex="-1">
+          <span class="material-symbols-outlined">deployed_code_update</span>
+          <span>
+            <b>Model</b>
+            <small>모델 파일 / 가중치</small>
           </span>
         </button>
       </div>
@@ -506,17 +513,17 @@
         </div>
         <button class="btn primary hidden" type="button" id="openModuleRegisterBtn">
           <span class="material-symbols-outlined">add</span>
-          모델 / 모듈 등록
+          노드 등록
         </button>
       </div>
 
       <details class="marketplace-register hidden" id="marketplaceRegisterPanel">
-        <summary>모델 / 모듈 등록 폼 열기</summary>
+        <summary>노드 등록 폼 열기</summary>
         <form id="marketplaceRegisterForm" class="marketplace-register-form" novalidate>
           <div class="marketplace-register-head">
             <div>
               <span class="eyebrow">NEW PACKAGE</span>
-              <h3 id="marketplaceRegisterTitle">모델 / 모듈 등록</h3>
+              <h3 id="marketplaceRegisterTitle">노드 등록</h3>
               <p>Git 주소 또는 ZIP 파일 본문과 설명을 Marketplace 서버에 등록합니다.</p>
             </div>
           </div>
@@ -533,7 +540,7 @@
               <label for="marketplacePackageKind">패키지 종류</label>
               <select id="marketplacePackageKind" name="kind" required>
                 <option value="model-pack">모델</option>
-                <option value="node-pack" selected>노드 / 모듈</option>
+                <option value="node-pack" selected>노드</option>
               </select>
             </div>
             <div class="field">
@@ -722,7 +729,7 @@
           </div>
           <div class="field full">
             <label for="scriptCommandInput">실행 명령</label>
-            <input id="scriptCommandInput" name="command" value="python scripts/math/add.py" />
+            <input id="scriptCommandInput" name="command" value="python-3.10.0-embed-amd64\python.exe scripts/math/add.py" />
           </div>
           <div class="field full">
             <label>Inputs</label>

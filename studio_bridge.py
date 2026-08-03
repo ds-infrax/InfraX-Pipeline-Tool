@@ -865,7 +865,8 @@ class BridgeState:
         self.workflows_dir = resolved_workflows
         self.catalog_path = resolved_root / "catalog.json"
         self.catalog_script = catalog_script
-        self.catalog_python = resolved_root / ".venv" / "Scripts" / "python.exe"
+        self.python_executable = resolved_root / "python-3.10.0-embed-amd64" / "python.exe"
+        self.catalog_python = self.python_executable
         self.main_script = main_script
         self.package_registry_path = resolved_root / PACKAGE_REGISTRY_FILENAME
         self.package_roots: dict[str, Path] = {}
@@ -905,7 +906,7 @@ class BridgeState:
             completed = self._run_python(
                 self.catalog_script,
                 timeout=self.catalog_timeout,
-                python_executable=self.catalog_python if self.catalog_python.is_file() else None,
+                python_executable=self.catalog_python,
             )
             if completed.returncode != 0:
                 raise BridgeError(
@@ -2696,6 +2697,7 @@ class BridgeState:
                     self.main_script,
                     str(relative_path),
                     timeout=self.run_timeout,
+                    python_executable=self.python_executable,
                 )
 
         return {
@@ -2722,6 +2724,7 @@ class BridgeState:
                 self.main_script,
                 str(relative_path),
                 timeout=self.run_timeout,
+                python_executable=self.python_executable,
             )
 
     def _workflow_path(self, filename: str) -> Path:
@@ -2913,7 +2916,7 @@ class BridgeState:
         environment = os.environ.copy()
         environment["PYTHONIOENCODING"] = "utf-8"
         environment["PYTHONUTF8"] = "1"
-        executable = python_executable or Path(sys.executable)
+        executable = python_executable if python_executable and python_executable.is_file() else Path(sys.executable)
         try:
             return subprocess.run(
                 [str(executable), "-B", str(script), *arguments],
@@ -2949,14 +2952,16 @@ class BridgeState:
         script: Path,
         *arguments: str,
         timeout: float,
+        python_executable: Path | None = None,
     ):
         environment = os.environ.copy()
         environment["PYTHONIOENCODING"] = "utf-8"
         environment["PYTHONUTF8"] = "1"
         environment["INFRAX_RUN_PROGRESS"] = "1"
+        executable = python_executable if python_executable and python_executable.is_file() else Path(sys.executable)
         try:
             process = subprocess.Popen(
-                [sys.executable, "-B", str(script), *arguments],
+                [str(executable), "-B", str(script), *arguments],
                 cwd=self.root,
                 shell=False,
                 stdout=subprocess.PIPE,

@@ -9,12 +9,12 @@ if errorlevel 1 (
 )
 
 set "PYTHON_EXE="
-if exist "%~dp0python_embeded\python.exe" (
-    set "PYTHON_EXE=%~dp0python_embeded\python.exe"
-) else if exist "%~dp0.venv\Scripts\python.exe" (
-    set "PYTHON_EXE=%~dp0.venv\Scripts\python.exe"
+if exist "%~dp0python-3.10.0-embed-amd64\python.exe" (
+    set "PYTHON_EXE=%~dp0python-3.10.0-embed-amd64\python.exe"
 ) else (
-    set "PYTHON_EXE=python"
+    echo [InfraX Studio] Missing embedded Python: %~dp0python-3.10.0-embed-amd64\python.exe
+    pause
+    exit /b 1
 )
 
 "%PYTHON_EXE%" "%~dp0studio_bridge.py" %*
