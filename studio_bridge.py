@@ -70,6 +70,7 @@ PLATFORM_PROXY_TIMEOUT = 5.0
 MAX_PLATFORM_EXCHANGE_RESPONSE = 1024 * 1024
 PACKAGE_REGISTRY_FILENAME = "package-registry.json"
 PACKAGE_MANIFEST_FILENAME = "infrax-package.json"
+WORKSPACE_EXPORT_MANIFEST_FILENAME = "infrax-export-manifest.json"
 TOOL_CONFIG_FILENAME = "tool-config.json"
 PLATFORM_CREDENTIAL_FILENAME = "marketplace-credentials.bin"
 
@@ -864,6 +865,7 @@ class BridgeState:
         self.workflows_dir = resolved_workflows
         self.catalog_path = resolved_root / "catalog.json"
         self.catalog_script = catalog_script
+        self.catalog_python = resolved_root / ".venv" / "Scripts" / "python.exe"
         self.main_script = main_script
         self.package_registry_path = resolved_root / PACKAGE_REGISTRY_FILENAME
         self.package_roots: dict[str, Path] = {}
@@ -900,7 +902,11 @@ class BridgeState:
 
     def refresh_catalog(self) -> dict[str, Any]:
         with self.catalog_lock:
-            completed = self._run_python(self.catalog_script, timeout=self.catalog_timeout)
+            completed = self._run_python(
+                self.catalog_script,
+                timeout=self.catalog_timeout,
+                python_executable=self.catalog_python if self.catalog_python.is_file() else None,
+            )
             if completed.returncode != 0:
                 raise BridgeError(
                     HTTPStatus.INTERNAL_SERVER_ERROR,
@@ -2029,6 +2035,204 @@ class BridgeState:
                 "resetWorkflow": self._workflow_reset_source(workflow),
             }
 
+    def export_workspace_bundle(self) -> dict[str, Any]:
+        with self.workflow_lock, self.catalog_lock, self.package_lock:
+            timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            current_state = self.current_workflow_state()
+            current_name = None
+            if current_state and isinstance(current_state.get("fileName"), str):
+                current_name = Path(current_state["fileName"]).stem
+            safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", current_name or "workspace").strip("._-") or "workspace"
+            filename = f"infrax-{safe_name}-{timestamp}.zip"
+            manifest: dict[str, Any] = {
+                "schema": "infrax.workspace.export.v1",
+                "createdAt": datetime.now(timezone.utc).isoformat(),
+                "toolVersion": TOOL_VERSION,
+                "currentWorkflow": current_state.get("fileName") if current_state else None,
+                "sourceWorkflow": current_state.get("sourceWorkflow") if current_state else None,
+                "resetWorkflow": current_state.get("resetWorkflow") if current_state else None,
+                "files": [],
+            }
+            files: list[dict[str, Any]] = []
+            for relative_path in self._workspace_export_paths():
+                source_path = self.root / relative_path
+                try:
+                    stat = source_path.stat()
+                except OSError:
+                    continue
+                entry = {
+                    "path": relative_path.as_posix(),
+                    "absolutePath": source_path,
+                    "size": stat.st_size,
+                    "modifiedAt": _iso_timestamp(stat.st_mtime),
+                }
+                files.append(entry)
+                manifest["files"].append(
+                    {
+                        "path": entry["path"],
+                        "size": entry["size"],
+                        "modifiedAt": entry["modifiedAt"],
+                    }
+                )
+            return {
+                "fileName": filename,
+                "manifest": manifest,
+                "files": files,
+            }
+
+    def import_workspace_bundle(self, archive_path: Path) -> dict[str, Any]:
+        restored: list[str] = []
+        skipped: list[str] = []
+        with self.workflow_lock, self.catalog_lock, self.package_lock:
+            try:
+                with zipfile.ZipFile(archive_path, "r") as archive:
+                    names = archive.namelist()
+                    infos = archive.infolist()
+                    if len(infos) > MAX_PACKAGE_ENTRIES:
+                        raise BridgeError(
+                            HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                            "workspace_too_many_entries",
+                            "내보내기 ZIP의 파일 수가 너무 많습니다.",
+                        )
+                    total_uncompressed = sum(info.file_size for info in infos)
+                    if total_uncompressed > MAX_PACKAGE_UNCOMPRESSED_BYTES:
+                        raise BridgeError(
+                            HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                            "workspace_uncompressed_too_large",
+                            "내보내기 ZIP의 압축 해제 크기가 너무 큽니다.",
+                        )
+                    if WORKSPACE_EXPORT_MANIFEST_FILENAME not in names:
+                        raise BridgeError(
+                            HTTPStatus.UNPROCESSABLE_ENTITY,
+                            "workspace_manifest_missing",
+                            "InfraX 내보내기 ZIP이 아닙니다. infrax-export-manifest.json 파일이 필요합니다.",
+                        )
+                    manifest = json.loads(
+                        archive.read(WORKSPACE_EXPORT_MANIFEST_FILENAME).decode("utf-8")
+                    )
+                    if not isinstance(manifest, dict) or manifest.get("schema") != "infrax.workspace.export.v1":
+                        raise BridgeError(
+                            HTTPStatus.UNPROCESSABLE_ENTITY,
+                            "workspace_manifest_invalid",
+                            "지원하지 않는 내보내기 ZIP 형식입니다.",
+                        )
+                    for info in infos:
+                        if info.is_dir() or info.filename == WORKSPACE_EXPORT_MANIFEST_FILENAME:
+                            continue
+                        relative_path = self._safe_workspace_import_path(info.filename)
+                        if relative_path is None:
+                            skipped.append(info.filename)
+                            continue
+                        target_path = self.root / relative_path
+                        target_path.parent.mkdir(parents=True, exist_ok=True)
+                        temporary_path: Path | None = None
+                        try:
+                            with tempfile.NamedTemporaryFile(
+                                mode="wb",
+                                prefix=f".{target_path.name}.",
+                                suffix=".tmp",
+                                dir=target_path.parent,
+                                delete=False,
+                            ) as temporary_file:
+                                temporary_path = Path(temporary_file.name)
+                                with archive.open(info, "r") as source_file:
+                                    shutil.copyfileobj(source_file, temporary_file)
+                                temporary_file.flush()
+                                os.fsync(temporary_file.fileno())
+                            os.replace(temporary_path, target_path)
+                            temporary_path = None
+                            restored.append(relative_path.as_posix())
+                        finally:
+                            if temporary_path is not None:
+                                temporary_path.unlink(missing_ok=True)
+            except zipfile.BadZipFile as error:
+                raise BridgeError(
+                    HTTPStatus.UNPROCESSABLE_ENTITY,
+                    "workspace_zip_invalid",
+                    "ZIP 파일을 읽을 수 없습니다.",
+                ) from error
+            except (OSError, UnicodeError, json.JSONDecodeError) as error:
+                raise BridgeError(
+                    HTTPStatus.UNPROCESSABLE_ENTITY,
+                    "workspace_import_failed",
+                    "내보내기 ZIP을 복구하지 못했습니다.",
+                ) from error
+        return {
+            "ok": True,
+            "restored": restored,
+            "skipped": skipped,
+            "restoredCount": len(restored),
+            "skippedCount": len(skipped),
+            "currentWorkflow": self.current_workflow_state(),
+        }
+
+    def _workspace_export_paths(self) -> list[Path]:
+        allowed_roots = (
+            Path("workflows") / "current",
+            Path("custom_nodes"),
+            Path("models"),
+        )
+        files: list[Path] = []
+        for relative_root in allowed_roots:
+            root = self.root / relative_root
+            if not root.exists():
+                continue
+            for candidate in root.rglob("*"):
+                if _path_is_linklike(candidate) or not candidate.is_file():
+                    continue
+                try:
+                    relative_path = candidate.relative_to(self.root)
+                except ValueError:
+                    continue
+                if self._safe_workspace_import_path(relative_path.as_posix()) is not None:
+                    files.append(relative_path)
+        for name in (
+            "catalog.json",
+            TOOL_CONFIG_FILENAME,
+            PACKAGE_REGISTRY_FILENAME,
+            "VERSION",
+        ):
+            candidate = self.root / name
+            if candidate.is_file() and not _path_is_linklike(candidate):
+                files.append(Path(name))
+        return sorted(set(files), key=lambda item: item.as_posix().casefold())
+
+    @staticmethod
+    def _safe_workspace_import_path(filename: str) -> Path | None:
+        normalized = filename.replace("\\", "/").lstrip("/")
+        relative_path = Path(normalized)
+        if (
+            not normalized
+            or relative_path.is_absolute()
+            or any(part in {"", ".", ".."} for part in relative_path.parts)
+        ):
+            return None
+        parts = relative_path.parts
+        if parts[:2] in {("workflows", "list"), ("workflows", "current")}:
+            return relative_path if len(parts) >= 3 and relative_path.suffix.lower() == ".json" else None
+        if parts[:1] in {("custom_nodes",), ("models",)}:
+            return relative_path if len(parts) >= 2 else None
+        if len(parts) == 1 and parts[0] in {
+            "catalog.json",
+            TOOL_CONFIG_FILENAME,
+            PACKAGE_REGISTRY_FILENAME,
+            "VERSION",
+        }:
+            return relative_path
+        return None
+
+    @staticmethod
+    def _unique_workspace_temp_path(directory: Path, prefix: str, suffix: str) -> Path:
+        for attempt in range(100):
+            candidate = directory / f"{prefix}{os.getpid()}-{time.time_ns()}-{attempt}{suffix}"
+            if not candidate.exists():
+                return candidate
+        raise BridgeError(
+            HTTPStatus.INTERNAL_SERVER_ERROR,
+            "workspace_temp_unavailable",
+            "내보내기/불러오기 임시 파일명을 만들 수 없습니다.",
+        )
+
     def list_workflows(self) -> list[dict[str, Any]]:
         with self.workflow_lock:
             workflows: list[dict[str, Any]] = []
@@ -2704,13 +2908,15 @@ class BridgeState:
         script: Path,
         *arguments: str,
         timeout: float,
+        python_executable: Path | None = None,
     ) -> subprocess.CompletedProcess[str]:
         environment = os.environ.copy()
         environment["PYTHONIOENCODING"] = "utf-8"
         environment["PYTHONUTF8"] = "1"
+        executable = python_executable or Path(sys.executable)
         try:
             return subprocess.run(
-                [sys.executable, "-B", str(script), *arguments],
+                [str(executable), "-B", str(script), *arguments],
                 cwd=self.root,
                 shell=False,
                 capture_output=True,
@@ -3233,6 +3439,17 @@ class StudioBridgeHandler(BaseHTTPRequestHandler):
                 self._ensure_empty_or_json_body()
                 self._send_json(HTTPStatus.OK, state.refresh_catalog())
                 return
+            if method == "GET" and segments == ["workspace", "export"]:
+                archive = state.export_workspace_bundle()
+                self._send_workspace_archive(archive)
+                return
+            if method == "POST" and segments == ["workspace", "import"]:
+                archive_path = self._read_workspace_archive(state)
+                try:
+                    self._send_json(HTTPStatus.OK, state.import_workspace_bundle(archive_path))
+                finally:
+                    state._remove_local_path(archive_path)
+                return
             if method == "GET" and segments == ["workflows"]:
                 self._send_json(
                     HTTPStatus.OK,
@@ -3600,6 +3817,33 @@ class StudioBridgeHandler(BaseHTTPRequestHandler):
                     b"",
                 ):
                     self.wfile.write(chunk)
+        except (OSError, BrokenPipeError, ConnectionResetError):
+            self.close_connection = True
+
+    def _send_workspace_archive(self, archive: dict[str, Any]) -> None:
+        ascii_name = re.sub(
+            r'[^\x20-\x7e]|["\\/\r\n]',
+            "_",
+            archive["fileName"],
+        )
+        self.send_response(HTTPStatus.OK)
+        self._send_common_headers()
+        self.send_header("Content-Type", "application/zip")
+        self.send_header(
+            "Content-Disposition",
+            f'attachment; filename="{ascii_name}"',
+        )
+        self.end_headers()
+        try:
+            with zipfile.ZipFile(self.wfile, "w", compression=zipfile.ZIP_DEFLATED) as zip_stream:
+                for entry in archive["files"]:
+                    zip_stream.write(entry["absolutePath"], entry["path"])
+                manifest_bytes = json.dumps(
+                    archive["manifest"],
+                    ensure_ascii=False,
+                    indent=2,
+                ).encode("utf-8") + b"\n"
+                zip_stream.writestr(WORKSPACE_EXPORT_MANIFEST_FILENAME, manifest_bytes)
         except (OSError, BrokenPipeError, ConnectionResetError):
             self.close_connection = True
 
@@ -4608,6 +4852,68 @@ class StudioBridgeHandler(BaseHTTPRequestHandler):
             state._remove_local_path(archive_path)
             raise
         return archive_path, digest.hexdigest()
+
+    def _read_workspace_archive(self, state: BridgeState) -> Path:
+        content_type = self.headers.get_content_type()
+        if content_type not in {"application/zip", "application/x-zip-compressed", "application/octet-stream"}:
+            raise BridgeError(
+                HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
+                "workspace_content_type_required",
+                "내보내기 ZIP은 application/zip 형식으로 전송해야 합니다.",
+            )
+        length_header = self.headers.get("Content-Length")
+        if length_header is None:
+            raise BridgeError(
+                HTTPStatus.LENGTH_REQUIRED,
+                "content_length_required",
+                "ZIP 업로드에는 Content-Length가 필요합니다.",
+            )
+        try:
+            length = int(length_header)
+        except ValueError as error:
+            raise BridgeError(
+                HTTPStatus.BAD_REQUEST,
+                "invalid_content_length",
+                "Content-Length가 올바르지 않습니다.",
+            ) from error
+        if length <= 0:
+            raise BridgeError(
+                HTTPStatus.BAD_REQUEST,
+                "invalid_content_length",
+                "ZIP 파일이 비어 있습니다.",
+            )
+        if length > state.package_archive_limit:
+            raise BridgeError(
+                HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                "workspace_archive_too_large",
+                f"내보내기 ZIP은 {state.package_archive_limit:,}바이트를 넘을 수 없습니다.",
+            )
+        temporary_dir = state._temp_workflow_dir()
+        temporary_dir.mkdir(parents=True, exist_ok=True)
+        archive_path = state._unique_workspace_temp_path(
+            temporary_dir,
+            "infrax-workspace-import-",
+            ".zip",
+        )
+        remaining = length
+        try:
+            with archive_path.open("xb") as output:
+                while remaining:
+                    chunk = self.rfile.read(min(1024 * 1024, remaining))
+                    if not chunk:
+                        raise BridgeError(
+                            HTTPStatus.BAD_REQUEST,
+                            "incomplete_workspace_archive",
+                            "ZIP 업로드가 완료되지 않았습니다.",
+                        )
+                    output.write(chunk)
+                    remaining -= len(chunk)
+                output.flush()
+                os.fsync(output.fileno())
+        except Exception:
+            state._remove_local_path(archive_path)
+            raise
+        return archive_path
 
     def _read_json_body(self) -> Any:
         content_type = self.headers.get_content_type()

@@ -135,8 +135,11 @@ class StudioSidebarNavigationTest(unittest.TestCase):
         topbar_end = HTML_SOURCE.index("</div>", topbar_start)
         topbar_markup = HTML_SOURCE[topbar_start:topbar_end]
         self.assertIn('id="resetWorkflowBtn"', HTML_SOURCE)
-        self.assertIn('id="cloneWorkflowBtn"', topbar_markup)
+        self.assertNotIn('id="cloneWorkflowBtn"', topbar_markup)
+        self.assertNotIn('id="resetWorkflowBtn"', topbar_markup)
         self.assertIn('id="saveWorkflowBtn"', HTML_SOURCE)
+        self.assertIn('id="exportWorkspaceBtn"', topbar_markup)
+        self.assertIn('id="importWorkspaceBtn"', topbar_markup)
         self.assertIn('id="runWorkflowBtn"', HTML_SOURCE)
         self.assertNotIn('id="downloadBtn"', HTML_SOURCE)
         self.assertNotIn("JSON 내보내기", HTML_SOURCE)
@@ -150,7 +153,10 @@ class StudioSidebarNavigationTest(unittest.TestCase):
         workflow_start = HTML_SOURCE.index('id="workflowSection"')
         workflow_end = HTML_SOURCE.index('id="tempWorkflowPanel"', workflow_start)
         workflow_markup = HTML_SOURCE[workflow_start:workflow_end]
-        self.assertNotIn('id="cloneWorkflowBtn"', workflow_markup)
+        self.assertIn('id="cloneWorkflowBtn"', workflow_markup)
+        self.assertIn('id="resetWorkflowBtn"', workflow_markup)
+        self.assertNotIn('id="exportWorkspaceBtn"', workflow_markup)
+        self.assertNotIn('id="importWorkspaceBtn"', workflow_markup)
 
     def test_cloned_workflow_is_created_as_current_draft_file(self):
         self.assertIn("function cloneWorkflow()", APP_SOURCE)

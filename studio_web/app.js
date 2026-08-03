@@ -759,7 +759,17 @@ function responseErrorMessage(response, result = {}) {
   if (response.status === 401) return "로그인이 필요하거나 세션이 만료되었습니다. 로컬 초안은 유지됩니다.";
   if (response.status === 403) return "이 항목을 변경할 권한이 없습니다.";
   if (response.status === 503) return "인증 서버에 일시적으로 연결할 수 없습니다. 잠시 후 다시 시도해 주세요.";
-  return result.error || `HTTP ${response.status}`;
+  if (typeof result.error === "string") return result.error;
+  if (typeof result.error?.message === "string") return result.error.message;
+  if (typeof result.message === "string") return result.message;
+  return `HTTP ${response.status}`;
+}
+
+function errorMessage(error, fallback = "오류") {
+  if (typeof error === "string") return error;
+  if (typeof error?.message === "string") return error.message;
+  if (typeof error?.error?.message === "string") return error.error.message;
+  return fallback;
 }
 
 async function loadAuthSession(options = {}) {
@@ -2599,6 +2609,84 @@ function downloadBlob(filename, data, type = "application/json") {
   anchor.download = filename;
   anchor.click();
   URL.revokeObjectURL(anchor.href);
+}
+
+function filenameFromContentDisposition(value, fallback) {
+  const header = String(value || "");
+  const utf8Match = header.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8Match) {
+    try {
+      return decodeURIComponent(utf8Match[1].trim().replace(/^"|"$/g, ""));
+    } catch {
+      return fallback;
+    }
+  }
+  const asciiMatch = header.match(/filename="?([^";]+)"?/i);
+  return asciiMatch ? asciiMatch[1] : fallback;
+}
+
+async function exportWorkspaceBundle() {
+  const button = document.getElementById("exportWorkspaceBtn");
+  if (button) button.disabled = true;
+  try {
+    if (isWorkflowDirty) {
+      await saveWorkflowToServer({ silent: true });
+    }
+    const response = await localToolFetch("workspace/export", {
+      method: "GET",
+      headers: { Accept: "application/zip" }
+    });
+    if (!response.ok) {
+      const result = await response.json().catch(() => ({}));
+      throw new Error(responseErrorMessage(response, result) || "내보내기 실패");
+    }
+    const blob = await response.blob();
+    const fallbackName = `${safeId(currentWorkflowFileName || currentWorkflow?.name || "workspace")}.zip`;
+    const fileName = filenameFromContentDisposition(
+      response.headers.get("Content-Disposition"),
+      fallbackName
+    );
+    downloadBlob(fileName, blob, "application/zip");
+    showToast(`내보내기 ZIP을 만들었습니다: ${fileName}`);
+  } catch (error) {
+    showToast(`내보내기 실패: ${errorMessage(error, "로컬 툴 연결 오류")}`);
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+async function importWorkspaceBundle(file) {
+  if (!file) return;
+  if (!confirm("내보낸 ZIP의 파일을 현재 Pipeline Tool 폴더에 복구합니다.\n같은 위치의 파일은 덮어쓸 수 있습니다. 계속할까요?")) {
+    return;
+  }
+  const button = document.getElementById("importWorkspaceBtn");
+  if (button) button.disabled = true;
+  try {
+    const response = await localToolFetch("workspace/import", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/zip",
+        Accept: "application/json"
+      },
+      body: file
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || result.ok === false) {
+      throw new Error(result?.error?.message || "불러오기 실패");
+    }
+    showToast(`불러오기 완료: ${result.restoredCount || 0}개 파일 복구`);
+    try {
+      await refreshLocalExplorer({ silent: true });
+    } catch {
+      await syncServerWorkflows({ notify: false }).catch(() => {});
+    }
+    await syncServerWorkflows({ loadCurrent: true, notify: false });
+  } catch (error) {
+    showToast(`불러오기 실패: ${error.message || "ZIP 복구 오류"}`);
+  } finally {
+    if (button) button.disabled = false;
+  }
 }
 
 async function downloadMarketplacePackage(packageId) {
@@ -5634,7 +5722,7 @@ function appendLog(message) {
 
 function showToast(message) {
   const toast = document.getElementById("toast");
-  toast.textContent = message;
+  toast.textContent = errorMessage(message, "오류");
   toast.classList.remove("hidden");
   clearTimeout(showToast.timer);
   showToast.timer = setTimeout(() => toast.classList.add("hidden"), 2400);
@@ -6508,6 +6596,17 @@ document.getElementById("connectPlatformAccountBtn")?.addEventListener("click", 
 document.getElementById("logoutPlatformAccountBtn")?.addEventListener("click", logoutPlatformAccount);
 document.getElementById("resetWorkflowBtn")?.addEventListener("click", resetCurrentWorkflow);
 document.getElementById("saveWorkflowBtn")?.addEventListener("click", saveWorkflowToServer);
+document.getElementById("exportWorkspaceBtn")?.addEventListener("click", exportWorkspaceBundle);
+document.getElementById("importWorkspaceBtn")?.addEventListener("click", () => document.getElementById("workspaceImportInput")?.click());
+document.getElementById("workspaceImportInput")?.addEventListener("change", async event => {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  try {
+    await importWorkspaceBundle(file);
+  } finally {
+    event.target.value = "";
+  }
+});
 document.getElementById("runWorkflowBtn")?.addEventListener("click", runLocalWorkflow);
 document.getElementById("closeRunOutputBtn")?.addEventListener("click", () => {
   document.getElementById("runOutputPanel")?.classList.add("hidden");

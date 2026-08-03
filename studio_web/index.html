@@ -33,18 +33,19 @@
         <button class="icon-button" id="historyBtn" type="button" title="변경 기록" aria-label="변경 기록 열기">
           <span class="material-symbols-outlined">history</span>
         </button>
-        <button class="btn ghost" id="resetWorkflowBtn" type="button" title="연결 원본이 있으면 workflows/list 원본으로 되돌리고, 새 워크플로우는 빈 상태로 초기화">
-          <span class="material-symbols-outlined">restart_alt</span>
-          초기화
-        </button>
-        <button class="btn ghost" id="cloneWorkflowBtn" type="button" title="현재 워크플로우를 새 이름의 작업본으로 복제">
-          <span class="material-symbols-outlined">content_copy</span>
-          새이름 복제
-        </button>
         <button class="btn ghost" id="saveWorkflowBtn" type="button" title="현재 워크플로우를 workflows/list 폴더에 저장">
           <span class="material-symbols-outlined">save</span>
           저장
         </button>
+        <button class="btn ghost workspace-transfer-action" id="exportWorkspaceBtn" type="button" title="현재 워크플로우와 실행에 필요한 로컬 자산을 ZIP으로 내보내기">
+          <span class="material-symbols-outlined">archive</span>
+          내보내기
+        </button>
+        <button class="btn ghost workspace-transfer-action" id="importWorkspaceBtn" type="button" title="내보낸 ZIP을 풀어 현재 PC의 제 위치에 복구">
+          <span class="material-symbols-outlined">unarchive</span>
+          불러오기
+        </button>
+        <input id="workspaceImportInput" type="file" accept=".zip,application/zip,application/x-zip-compressed" hidden />
         <button class="btn ghost" id="runWorkflowBtn" type="button" title="필요하면 먼저 저장한 뒤 현재 워크플로우를 main.py로 실행">
           <span class="material-symbols-outlined">play_arrow</span>
           실행
@@ -126,9 +127,17 @@
                 <span class="eyebrow">WORKFLOWS</span>
                 <h2>워크플로우</h2>
               </div>
-              <button class="icon-button compact accent" id="newWorkflowBtn" type="button" title="새 워크플로우" aria-label="새 워크플로우">
-                <span class="material-symbols-outlined">add</span>
-              </button>
+              <div class="section-heading-actions" aria-label="워크플로우 작업">
+                <button class="icon-button compact accent" id="newWorkflowBtn" type="button" title="새 워크플로우" aria-label="새 워크플로우">
+                  <span class="material-symbols-outlined">add</span>
+                </button>
+                <button class="icon-button compact" id="cloneWorkflowBtn" type="button" title="현재 워크플로우 새이름 복제" aria-label="현재 워크플로우 새이름 복제">
+                  <span class="material-symbols-outlined">content_copy</span>
+                </button>
+                <button class="icon-button compact" id="resetWorkflowBtn" type="button" title="현재 워크플로우 초기화" aria-label="현재 워크플로우 초기화">
+                  <span class="material-symbols-outlined">restart_alt</span>
+                </button>
+              </div>
             </div>
             <div class="section-inline-actions">
               <button class="text-action" id="toggleWorkflowListBtn" type="button">현재만</button>
