@@ -1404,6 +1404,8 @@ class BridgeState:
         metadata: dict[str, Any],
         archive_path: Path,
         archive_digest: str,
+        *,
+        install_channel: str = "",
     ) -> dict[str, Any]:
         """Validate and atomically install one Marketplace ZIP package."""
 
@@ -1416,9 +1418,50 @@ class BridgeState:
             )
 
         package_root = self.package_roots[metadata["kind"]]
-        target = package_root / metadata["id"]
+        if install_channel and metadata["kind"] != "node-pack":
+            raise BridgeError(
+                HTTPStatus.UNPROCESSABLE_ENTITY,
+                "package_install_channel_invalid",
+                "설치 채널은 노드 패키지에만 사용할 수 있습니다.",
+            )
+        if install_channel not in {"", "market"}:
+            raise BridgeError(
+                HTTPStatus.UNPROCESSABLE_ENTITY,
+                "package_install_channel_invalid",
+                "지원하지 않는 설치 채널입니다.",
+            )
+        target_parent = package_root / install_channel if install_channel else package_root
+        target = target_parent / metadata["id"]
 
         with self.package_lock:
+            try:
+                if _path_is_linklike(target_parent):
+                    raise OSError("symbolic-link package channel")
+                target_parent.mkdir(parents=True, exist_ok=True)
+                resolved_target_parent = target_parent.resolve(strict=True)
+            except (OSError, RuntimeError, ValueError) as error:
+                raise BridgeError(
+                    HTTPStatus.UNPROCESSABLE_ENTITY,
+                    "package_install_channel_invalid",
+                    "패키지 설치 폴더를 준비할 수 없습니다.",
+                ) from error
+            if (
+                not resolved_target_parent.is_dir()
+                or resolved_target_parent != target_parent
+                or (
+                    install_channel
+                    and resolved_target_parent.parent != package_root
+                )
+                or (
+                    not install_channel
+                    and resolved_target_parent != package_root
+                )
+            ):
+                raise BridgeError(
+                    HTTPStatus.UNPROCESSABLE_ENTITY,
+                    "package_install_channel_invalid",
+                    "패키지 설치 폴더가 custom_nodes 바로 아래의 안전한 폴더가 아닙니다.",
+                )
             if _path_is_linklike(target) or (target.exists() and not target.is_dir()):
                 raise BridgeError(
                     HTTPStatus.CONFLICT,
@@ -1428,10 +1471,10 @@ class BridgeState:
             staging = Path(
                 tempfile.mkdtemp(
                     prefix=f".{metadata['id']}.install-",
-                    dir=package_root,
+                    dir=target_parent,
                 )
             )
-            backup = package_root / (
+            backup = target_parent / (
                 f".{metadata['id']}.backup-{secrets.token_hex(12)}"
             )
             target_was_moved = False
@@ -1930,10 +1973,17 @@ class BridgeState:
             expected_id=value.get("id"),
         )
         install_path = value.get("installPath")
-        expected_path = (
-            self.package_roots[metadata["kind"]] / metadata["id"]
-        ).relative_to(self.asset_root).as_posix()
-        if install_path != expected_path:
+        package_root = self.package_roots[metadata["kind"]]
+        expected_paths = {
+            (package_root / metadata["id"]).relative_to(self.asset_root).as_posix()
+        }
+        if metadata["kind"] == "node-pack":
+            expected_paths.add(
+                (package_root / "market" / metadata["id"])
+                .relative_to(self.asset_root)
+                .as_posix()
+            )
+        if install_path not in expected_paths:
             raise ValueError("invalid install path")
         installed_at = value.get("installedAt")
         if not isinstance(installed_at, str) or len(installed_at) > 64:
@@ -1949,6 +1999,14 @@ class BridgeState:
         }
 
     def _registered_package_path(self, package: dict[str, Any]) -> Path:
+        install_path = package.get("installPath")
+        if isinstance(install_path, str) and install_path:
+            candidate = (self.asset_root / install_path).resolve()
+            try:
+                candidate.relative_to(self.asset_root)
+            except ValueError:
+                return self.package_roots[package["kind"]] / package["id"]
+            return candidate
         return self.package_roots[package["kind"]] / package["id"]
 
     def _write_package_registry_unlocked(
@@ -3874,6 +3932,9 @@ class StudioBridgeHandler(BaseHTTPRequestHandler):
                         metadata,
                         archive_path,
                         archive_digest,
+                        install_channel=(
+                            "market" if metadata.get("kind") == "node-pack" else ""
+                        ),
                     )
                 finally:
                     state._remove_local_path(archive_path)

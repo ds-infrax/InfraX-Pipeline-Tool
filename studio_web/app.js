@@ -1340,11 +1340,13 @@ function isNodePackageInCustomNodes(pkg) {
   if (localPublishablePackages.some(item => (
     item.id === id
     || item.installPath === `custom_nodes/${id}`
+    || item.installPath === `custom_nodes/market/${id}`
     || item.nodeTypes?.some(type => nodeTypes.has(type))
   ))) return true;
   return installedLocalPackages.some(item => (
     item?.id === id
     || item?.installPath === `custom_nodes/${id}`
+    || item?.installPath === `custom_nodes/market/${id}`
     || item?.source === "custom_nodes"
     || item?.nodeTypes?.some(type => nodeTypes.has(type))
   ));
@@ -1416,7 +1418,7 @@ function renderSidebarMarketplace() {
     const sourceLabel = isWorkspace
       ? `${pkg.workflow?.data?.nodes?.length || 0} nodes`
       : isNodePack
-        ? `custom_nodes/${escapeHtml(pkg.id || "package")}`
+        ? `${pkg.id || "package"}`
         : pkg.source?.type === "git"
           ? "Git"
           : pkg.source?.type === "zip"
@@ -1428,7 +1430,7 @@ function renderSidebarMarketplace() {
     const actionLabel = alreadyPresent ? "있음" : isWorkspace ? "목록에 추가" : "가져오기";
     const disabledAttr = alreadyPresent ? ' disabled aria-disabled="true"' : "";
     return `
-      <button class="sidebar-market-card ${alreadyPresent ? "already-added" : ""}" type="button" onclick="${action}"${disabledAttr}>
+      <button class="sidebar-market-card ${alreadyPresent ? "already-added" : ""}" type="button" title="${escapeHtml(isNodePack ? `custom_nodes/${pkg.id || "package"}` : sourceLabel)}" onclick="${action}"${disabledAttr}>
         <span>
           <b>${escapeHtml(pkg.name || "Untitled")}</b>
           <small>${escapeHtml(kindLabel)} · v${escapeHtml(pkg.version || "1.0.0")} · ${sourceLabel}</small>
@@ -1443,13 +1445,13 @@ function renderSidebarMarketplace() {
   }
   const groups = new Map();
   visiblePackages.forEach(pkg => {
-    const key = `custom_nodes/${pkg.id || "package"}`;
+    const key = `${pkg.id || "package"}`;
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(pkg);
   });
   root.innerHTML = [...groups.entries()].map(([folder, packages]) => `
     <details class="node-tree-group sidebar-market-tree" open>
-      <summary>
+      <summary title="${escapeHtml(`custom_nodes/${folder}`)}">
         <span class="material-symbols-outlined" aria-hidden="true">folder</span>
         <b>${escapeHtml(folder)}</b>
         <small>${packages.length} items</small>
@@ -6936,6 +6938,9 @@ document.getElementById("refreshSidebarMarketplaceBtn")?.addEventListener("click
     ]);
   }
   renderSidebarMarketplace();
+});
+document.getElementById("openMarketplaceShortcutBtn")?.addEventListener("click", () => {
+  openMarketplaceView({ fullList: true });
 });
 document.getElementById("historyBtn").addEventListener("click", focusHistoryPanel);
 document.getElementById("fitBtn").addEventListener("click", fitView);

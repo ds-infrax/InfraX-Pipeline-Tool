@@ -1212,6 +1212,11 @@ textarea:hover {
   cursor: pointer;
 }
 
+.sidebar-market-card > span {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
 .sidebar-market-card:hover {
   transform: translateY(-1px);
   box-shadow: 0 16px 32px rgba(46, 72, 110, 0.12);
@@ -1231,12 +1236,16 @@ textarea:hover {
 .sidebar-market-card b,
 .sidebar-market-card small {
   display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .sidebar-market-card small {
   margin-top: 4px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 10px;
+  line-height: 1.35;
 }
 
 .sidebar-market-card em {
@@ -1267,6 +1276,7 @@ textarea:hover {
   color: var(--muted);
   cursor: pointer;
   list-style: none;
+  min-width: 0;
 }
 
 .node-tree-group > summary::-webkit-details-marker {
@@ -1277,7 +1287,7 @@ textarea:hover {
   flex: 1;
   min-width: 0;
   color: var(--text);
-  font-size: 12px;
+  font-size: 11px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1285,7 +1295,7 @@ textarea:hover {
 
 .node-tree-group > summary small {
   color: var(--muted);
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 800;
 }
 

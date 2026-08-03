@@ -1052,8 +1052,18 @@ class StudioBridgeTest(unittest.TestCase):
             )
         self.assertEqual(status, 200)
         self.assertEqual(body["package"]["id"], "streamed-node")
+        self.assertEqual(
+            body["package"]["installPath"],
+            "custom_nodes/market/streamed-node",
+        )
         self.assertTrue(
-            (self.root / "custom_nodes" / "streamed-node" / "nodes.py").is_file()
+            (
+                self.root
+                / "custom_nodes"
+                / "market"
+                / "streamed-node"
+                / "nodes.py"
+            ).is_file()
         )
         upstream = FakeHTTPSConnection.requests[0]
         self.assertEqual(
