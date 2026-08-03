@@ -1529,9 +1529,18 @@ textarea:hover {
   box-shadow: 0 0 0 3px rgba(65, 104, 215, 0.4), var(--shadow);
 }
 
+.node.error {
+  box-shadow: 0 0 0 3px rgba(190, 49, 68, 0.42), var(--shadow);
+}
+
 .node.success .node-dot {
   background: var(--primary-container);
   box-shadow: 0 0 9px rgba(65, 104, 215, 0.8);
+}
+
+.node.error .node-dot {
+  background: #be3144;
+  box-shadow: 0 0 9px rgba(190, 49, 68, 0.75);
 }
 
 .node-badge {

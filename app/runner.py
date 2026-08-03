@@ -1,9 +1,12 @@
 import json
+import os
 from pathlib import Path
 from pprint import pprint
 
 from app import build_catalog, execute_workflow, parse_workflow, validate_workflow
 from app.core.config import NODE_MODULES
+
+RUN_EVENT_PREFIX = "INFRA_RUN_EVENT "
 
 
 def run_workflow(workflow_path, runtime_id="local-dev"):
@@ -20,7 +23,11 @@ def run_workflow(workflow_path, runtime_id="local-dev"):
         return None
 
     graph = parse_workflow(workflow_data)
-    outputs = execute_workflow(workflow_data, node_modules=NODE_MODULES)
+    outputs = execute_workflow(
+        workflow_data,
+        node_modules=NODE_MODULES,
+        on_node_event=_emit_node_event,
+    )
     final_node_id = _final_node_id(graph)
 
     print("execution outputs:")
@@ -36,6 +43,25 @@ def build_project_catalog(output_path=None, runtime_id="local-dev"):
         Path(output_path).write_text(json.dumps(catalog, indent=2))
 
     return catalog
+
+
+def _emit_node_event(status, spec):
+    if os.environ.get("INFRAX_RUN_PROGRESS") != "1":
+        return
+    print(
+        RUN_EVENT_PREFIX
+        + json.dumps(
+            {
+                "type": "node",
+                "status": status,
+                "nodeId": spec.id,
+                "nodeType": spec.type,
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ),
+        flush=True,
+    )
 
 
 def _final_node_id(graph):

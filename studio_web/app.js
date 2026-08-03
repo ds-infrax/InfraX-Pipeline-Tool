@@ -5740,6 +5740,91 @@ function showRunOutput(title, output) {
   panel?.classList.remove("hidden");
 }
 
+function appendRunOutput(line) {
+  const textElement = document.getElementById("runOutputText");
+  if (!textElement) return;
+  textElement.textContent = `${textElement.textContent || ""}${line}\n`;
+  textElement.scrollTop = textElement.scrollHeight;
+}
+
+function setRunNodeStatus(nodeId, status) {
+  const node = currentWorkflow.nodes.find(item => String(item.id) === String(nodeId));
+  if (!node) return null;
+  node.run_status = status;
+  return node;
+}
+
+function markWorkflowRunQueued() {
+  currentWorkflow.nodes.forEach(node => { node.run_status = "pending"; });
+  renderAll();
+}
+
+function applyWorkflowRunEvent(event) {
+  if (event?.type === "node") {
+    const node = setRunNodeStatus(event.nodeId, event.status);
+    if (node && event.status === "running") {
+      selectedNodeId = node.id;
+      selectedLinkId = null;
+    }
+    renderAll();
+    return;
+  }
+  if (event?.type === "output" && event.text) {
+    appendRunOutput(`[${event.stream || "stdout"}] ${event.text}`);
+  }
+}
+
+async function readRunEventStream(response, onEvent) {
+  if (!response.body) return null;
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let finalEvent = null;
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      const event = JSON.parse(line);
+      onEvent(event);
+      if (event.type === "run") finalEvent = event;
+    }
+  }
+  buffer += decoder.decode();
+  if (buffer.trim()) {
+    const event = JSON.parse(buffer);
+    onEvent(event);
+    if (event.type === "run") finalEvent = event;
+  }
+  return finalEvent;
+}
+
+async function runWorkflowWithLegacyEndpoint(requestFileName) {
+  const response = await localToolFetch(
+    `workflows/${encodeURIComponent(requestFileName)}/run`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    }
+  );
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok || !Number.isInteger(result.returnCode)) {
+    throw new Error(
+      response.status === 401
+        ? "연결 토큰이 필요합니다"
+        : result.error?.message || `HTTP ${response.status}`
+    );
+  }
+  return {
+    ...result,
+    legacyRun: true,
+  };
+}
+
 async function runLocalWorkflow() {
   if (localToolRunActive) return false;
   localToolRunActive = true;
@@ -5765,27 +5850,46 @@ async function runLocalWorkflow() {
     requestWorkflowId = currentWorkflowId;
     requestWorkflowObject = currentWorkflow;
     requestFileName = currentWorkflowFileName;
-    showRunOutput(`${requestFileName} 실행 중`, "python main.py workflows/... 실행을 기다리는 중입니다.");
+    markWorkflowRunQueued();
+    showRunOutput(`${requestFileName} 실행 중`, "python main.py workflows/... 실행을 기다리는 중입니다.\n");
     const response = await localToolFetch(
-      `workflows/${encodeURIComponent(requestFileName)}/run`,
+      `workflows/${encodeURIComponent(requestFileName)}/run-stream`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: "{}",
       }
     );
-    const result = await response.json().catch(() => ({}));
+    let result = null;
+    if (!response.ok) {
+      const errorResult = await response.json().catch(() => ({}));
+      if (response.status === 404 && errorResult.error?.code === "not_found") {
+        appendRunOutput("[info] 현재 실행 중인 studio_bridge.py가 실시간 진행 API를 아직 지원하지 않아 기존 실행 방식으로 전환합니다.");
+        showToast("studio_bridge.py를 재시작하면 노드별 실시간 진행 표시가 활성화됩니다.");
+        result = await runWorkflowWithLegacyEndpoint(requestFileName);
+        result.stdout = [
+          "studio_bridge.py 재시작 전이라 노드별 실시간 진행 표시는 사용할 수 없습니다.",
+          result.stdout || "",
+        ].filter(Boolean).join("\n");
+      } else {
+        throw new Error(
+          response.status === 401
+            ? "연결 토큰이 필요합니다"
+            : errorResult.error?.message || `HTTP ${response.status}`
+        );
+      }
+    } else {
+      result = await readRunEventStream(response, applyWorkflowRunEvent) || {};
+    }
     if (
       !isCurrentLocalToolContext(requestContext)
       || requestWorkflowId !== currentWorkflowId
       || requestWorkflowObject !== currentWorkflow
       || requestFileName !== currentWorkflowFileName
     ) return false;
-    if (!response.ok || !Number.isInteger(result.returnCode)) {
+    if (!Number.isInteger(result.returnCode)) {
       throw new Error(
-        response.status === 401
-          ? "연결 토큰이 필요합니다"
-          : result.error?.message || `HTTP ${response.status}`
+        result.message || "실행 완료 상태를 확인하지 못했습니다."
       );
     }
     const output = [
@@ -5794,7 +5898,7 @@ async function runLocalWorkflow() {
       `\n종료 코드: ${result.returnCode}`,
     ].filter(Boolean).join("\n\n");
     showRunOutput(
-      result.returnCode === 0 ? `${result.fileName} 실행 완료` : `${result.fileName} 실행 실패`,
+      result.returnCode === 0 ? `${requestFileName} 실행 완료` : `${requestFileName} 실행 실패`,
       output
     );
     showToast(result.returnCode === 0 ? "로컬 워크플로우 실행을 완료했습니다." : `실행 종료 코드: ${result.returnCode}`);
@@ -6742,7 +6846,12 @@ window.addEventListener("storage", event => {
       && event.newValue != null
     ) return;
     if (!hasAnyDirtyWorkflow() && !hasUnsavedFormInput()) {
-      window.location.reload();
+      const restored = restoreState();
+      if (restored.restored) {
+        renderAll();
+        fitView();
+        applyCurrentWorkflowSaveState();
+      }
       return;
     }
     externalDraftConflict = true;

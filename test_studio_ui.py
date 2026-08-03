@@ -201,6 +201,22 @@ class StudioSidebarNavigationTest(unittest.TestCase):
         self.assertIn("const savedHash = meta.lastFolderSavedHash || lastFolderSavedHash;", APP_SOURCE)
         self.assertIn("return !savedHash || currentHash !== savedHash;", APP_SOURCE)
 
+    def test_real_run_stream_updates_canvas_node_status(self):
+        self.assertIn("function applyWorkflowRunEvent(event)", APP_SOURCE)
+        self.assertIn("async function readRunEventStream(response, onEvent)", APP_SOURCE)
+        self.assertIn("markWorkflowRunQueued();", APP_SOURCE)
+        self.assertIn('`workflows/${encodeURIComponent(requestFileName)}/run-stream`', APP_SOURCE)
+        self.assertIn('node.run_status = status;', APP_SOURCE)
+        self.assertIn(".node.error", STYLE_SOURCE)
+
+    def test_external_clean_draft_update_does_not_force_reload_loop(self):
+        clean_update_start = APP_SOURCE.index("if (!hasAnyDirtyWorkflow() && !hasUnsavedFormInput())")
+        clean_update_end = APP_SOURCE.index("externalDraftConflict = true", clean_update_start)
+        clean_update_block = APP_SOURCE[clean_update_start:clean_update_end]
+        self.assertIn("const restored = restoreState();", clean_update_block)
+        self.assertIn("renderAll();", clean_update_block)
+        self.assertNotIn("window.location.reload()", clean_update_block)
+
     def test_local_workflow_files_have_a_separate_sidebar_tab(self):
         self.assertIn('data-target="localFilesSection"', HTML_SOURCE)
         self.assertIn('id="localFilesSection"', HTML_SOURCE)

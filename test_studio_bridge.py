@@ -2150,6 +2150,47 @@ class StudioBridgeTest(unittest.TestCase):
         self.assertEqual(body["returnCode"], 7)
         self.assertIn("workflow=workflows/list/failure.json", body["stdout"])
 
+    def test_run_stream_emits_node_progress_events(self):
+        (self.root / "main.py").write_text(
+            "\n".join(
+                [
+                    "import json",
+                    "import sys",
+                    "from pathlib import Path",
+                    "workflow_path = Path(sys.argv[1])",
+                    'workflow = json.loads(workflow_path.read_text(encoding="utf-8"))',
+                    "for node in workflow.get('nodes', []):",
+                    "    print('INFRA_RUN_EVENT ' + json.dumps({'type':'node','status':'running','nodeId':node['id']}), flush=True)",
+                    "    print('INFRA_RUN_EVENT ' + json.dumps({'type':'node','status':'success','nodeId':node['id']}), flush=True)",
+                    "print('done', flush=True)",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        self.request(
+            "PUT",
+            "/workflows/progress.json",
+            payload={"nodes": [{"id": 1}, {"id": 2}], "links": []},
+        )
+
+        status, headers, raw_body = self.raw_request(
+            "POST",
+            "/workflows/progress.json/run-stream",
+            origin=self.origin,
+            authorize=True,
+            extra_headers={"X-InfraX-Tool-Context": self.default_tool_context},
+        )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(headers["Content-Type"], "application/x-ndjson; charset=utf-8")
+        events = [json.loads(line) for line in raw_body.decode("utf-8").splitlines()]
+        self.assertEqual(events[0]["status"], "started")
+        self.assertIn({"type": "node", "status": "running", "nodeId": 1}, events)
+        self.assertIn({"type": "node", "status": "success", "nodeId": 2}, events)
+        self.assertEqual(events[-1]["status"], "completed")
+        self.assertEqual(events[-1]["returnCode"], 0)
+        self.assertNotIn("INFRA_RUN_EVENT", events[-1]["stdout"])
+
     def test_run_timeout_stops_long_running_process(self):
         self.server.state.run_timeout = 0.05
         self.request(

@@ -4,7 +4,7 @@ from app.core.protocol import parse_workflow, validate_workflow
 from app.core.schema import run_input_types, validate_run_return
 
 
-def execute_workflow(data, node_modules=None):
+def execute_workflow(data, node_modules=None, on_node_event=None):
     errors = validate_workflow(data, node_modules=node_modules)
     if errors:
         raise ValueError(errors)
@@ -21,7 +21,16 @@ def execute_workflow(data, node_modules=None):
             raise ValueError(f"Workflow has unresolved dependencies or a cycle near nodes: {waiting}")
 
         for spec in ready:
-            outputs[spec.id] = _execute_node(spec, links, outputs, node_modules)
+            if on_node_event:
+                on_node_event("running", spec)
+            try:
+                outputs[spec.id] = _execute_node(spec, links, outputs, node_modules)
+            except Exception:
+                if on_node_event:
+                    on_node_event("error", spec)
+                raise
+            if on_node_event:
+                on_node_event("success", spec)
             pending.remove(spec)
 
     return outputs

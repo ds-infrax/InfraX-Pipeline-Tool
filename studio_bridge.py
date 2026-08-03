@@ -25,6 +25,7 @@ import html
 import http.client
 import json
 import os
+import queue
 import re
 import secrets
 import shutil
@@ -34,6 +35,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import webbrowser
 import zipfile
 from ctypes import wintypes
@@ -55,6 +57,7 @@ DEFAULT_STUDIO_DIRECTORY = "studio_web"
 DEFAULT_BODY_LIMIT = 5 * 1024 * 1024
 DEFAULT_CATALOG_TIMEOUT = 30.0
 DEFAULT_RUN_TIMEOUT = 600.0
+RUN_EVENT_PREFIX = "INFRA_RUN_EVENT "
 MAX_RESPONSE_OUTPUT = 200_000
 MAX_TOOL_CONTEXTS = 64
 DEFAULT_PACKAGE_ARCHIVE_LIMIT = 16 * 1024 * 1024 * 1024
@@ -679,6 +682,16 @@ def _limited_output(value: str | bytes | None) -> str:
         return value
     omitted = len(value) - MAX_RESPONSE_OUTPUT
     return f"{value[:MAX_RESPONSE_OUTPUT]}\n... ({omitted} characters omitted)"
+
+
+def _parse_run_event_line(line: str) -> dict[str, Any] | None:
+    if not line.startswith(RUN_EVENT_PREFIX):
+        return None
+    try:
+        event = json.loads(line[len(RUN_EVENT_PREFIX):])
+    except json.JSONDecodeError:
+        return None
+    return event if isinstance(event, dict) else None
 
 
 def _path_is_linklike(path: Path) -> bool:
@@ -2489,6 +2502,24 @@ class BridgeState:
             "stderr": _limited_output(completed.stderr),
         }
 
+    def stream_workflow_run(self, filename: str):
+        with self.run_lock:
+            with self.workflow_lock:
+                path = self._workflow_path(filename)
+                if not path.is_file():
+                    raise BridgeError(
+                        HTTPStatus.NOT_FOUND,
+                        "workflow_not_found",
+                        f"워크플로우 파일을 찾을 수 없습니다: {filename}",
+                    )
+                relative_path = path.relative_to(self.root)
+            yield {"type": "run", "status": "started", "fileName": filename}
+            yield from self._run_python_stream(
+                self.main_script,
+                str(relative_path),
+                timeout=self.run_timeout,
+            )
+
     def _workflow_path(self, filename: str) -> Path:
         relative_path = _safe_workflow_relative_path(filename)
         candidate = self.workflows_dir / relative_path
@@ -2706,6 +2737,99 @@ class BridgeState:
                 "process_start_failed",
                 "로컬 Python 프로세스를 시작하지 못했습니다.",
             ) from error
+
+    def _run_python_stream(
+        self,
+        script: Path,
+        *arguments: str,
+        timeout: float,
+    ):
+        environment = os.environ.copy()
+        environment["PYTHONIOENCODING"] = "utf-8"
+        environment["PYTHONUTF8"] = "1"
+        environment["INFRAX_RUN_PROGRESS"] = "1"
+        try:
+            process = subprocess.Popen(
+                [sys.executable, "-B", str(script), *arguments],
+                cwd=self.root,
+                shell=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                env=environment,
+            )
+        except OSError as error:
+            raise BridgeError(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                "process_start_failed",
+                "로컬 Python 프로세스를 시작하지 못했습니다.",
+            ) from error
+
+        lines: queue.Queue[tuple[str, str | None]] = queue.Queue()
+
+        def read_stream(name: str, stream: Any) -> None:
+            try:
+                for line in iter(stream.readline, ""):
+                    lines.put((name, line.rstrip("\r\n")))
+            finally:
+                try:
+                    stream.close()
+                except OSError:
+                    pass
+                lines.put((name, None))
+
+        threading.Thread(target=read_stream, args=("stdout", process.stdout), daemon=True).start()
+        threading.Thread(target=read_stream, args=("stderr", process.stderr), daemon=True).start()
+        started_at = time.monotonic()
+        stdout_closed = False
+        stderr_closed = False
+        stdout_lines: list[str] = []
+        stderr_lines: list[str] = []
+        return_code = None
+
+        try:
+            while not (stdout_closed and stderr_closed and process.poll() is not None):
+                if time.monotonic() - started_at > timeout:
+                    process.kill()
+                    yield {
+                        "type": "run",
+                        "status": "timeout",
+                        "message": f"로컬 Python 실행이 {timeout:g}초 제한 시간을 초과했습니다.",
+                    }
+                    break
+                try:
+                    stream_name, line = lines.get(timeout=0.1)
+                except queue.Empty:
+                    continue
+                if line is None:
+                    if stream_name == "stdout":
+                        stdout_closed = True
+                    else:
+                        stderr_closed = True
+                    continue
+                if stream_name == "stdout":
+                    event = _parse_run_event_line(line)
+                    if event:
+                        yield event
+                        continue
+                    stdout_lines.append(line)
+                else:
+                    stderr_lines.append(line)
+                yield {"type": "output", "stream": stream_name, "text": line}
+            return_code = process.wait(timeout=1)
+        except Exception:
+            process.kill()
+            raise
+
+        yield {
+            "type": "run",
+            "status": "completed" if return_code == 0 else "failed",
+            "returnCode": return_code,
+            "stdout": _limited_output("\n".join(stdout_lines)),
+            "stderr": _limited_output("\n".join(stderr_lines)),
+        }
 
 
 class StudioBridgeServer(ThreadingHTTPServer):
@@ -3204,6 +3328,16 @@ class StudioBridgeHandler(BaseHTTPRequestHandler):
                     HTTPStatus.OK,
                     state.delete_temp_workflow(filename),
                 )
+                return
+            if (
+                method == "POST"
+                and len(segments) == 3
+                and segments[0] == "workflows"
+                and segments[2] == "run-stream"
+            ):
+                self._ensure_empty_or_json_body()
+                filename = self._decode_filename(segments[1])
+                self._send_ndjson_stream(state.stream_workflow_run(filename))
                 return
             if (
                 method == "POST"
@@ -4557,6 +4691,19 @@ class StudioBridgeHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def _send_ndjson_stream(self, events) -> None:
+        self.send_response(HTTPStatus.OK)
+        self._send_common_headers()
+        self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+        self.end_headers()
+        for event in events:
+            body = (json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
+            try:
+                self.wfile.write(body)
+                self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                break
 
     def _send_common_headers(self) -> None:
         origin = self.headers.get("Origin")
