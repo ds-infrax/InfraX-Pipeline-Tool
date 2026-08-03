@@ -70,6 +70,7 @@ PLATFORM_PROXY_TIMEOUT = 5.0
 MAX_PLATFORM_EXCHANGE_RESPONSE = 1024 * 1024
 PACKAGE_REGISTRY_FILENAME = "package-registry.json"
 PACKAGE_MANIFEST_FILENAME = "infrax-package.json"
+ASSET_REGISTRY_FILENAME = ".infrax-assets.json"
 WORKSPACE_EXPORT_MANIFEST_FILENAME = "infrax-export-manifest.json"
 TOOL_CONFIG_FILENAME = "tool-config.json"
 PLATFORM_CREDENTIAL_FILENAME = "marketplace-credentials.bin"
@@ -409,6 +410,13 @@ def _load_tool_config(path: Path | None = None) -> dict[str, Any]:
     value = document.get("platformApiBase")
     if value is not None and not isinstance(value, str):
         raise ValueError("tool-config platformApiBase must be a string or null")
+    asset_git = document.get("assetGit")
+    if asset_git is not None and not isinstance(asset_git, dict):
+        raise ValueError("tool-config assetGit must be an object or null")
+    if isinstance(asset_git, dict):
+        asset_root = asset_git.get("root")
+        if asset_root is not None and not isinstance(asset_root, str):
+            raise ValueError("tool-config assetGit.root must be a string or null")
     return document
 
 
@@ -703,6 +711,12 @@ def _path_is_linklike(path: Path) -> bool:
     )
 
 
+def _flush_file(file: Any) -> None:
+    file.flush()
+    if os.name != "nt":
+        os.fsync(file.fileno())
+
+
 def _local_source_name_excluded(name: str, *, directory: bool) -> bool:
     lowered = name.casefold()
     if directory:
@@ -770,6 +784,9 @@ class BridgeState:
             "toolVersion": TOOL_VERSION,
             "pairingRequired": True,
         }
+
+    def workflow_git_status(self) -> dict[str, Any]:
+        return self._workflow_git_status()
 
     def _set_tool_root(self, root: Path) -> None:
         raw_root = os.fspath(root)
@@ -842,7 +859,39 @@ class BridgeState:
                 "app 패키지는 실행 도구 폴더 바로 아래에 있어야 합니다.",
             )
 
-        workflows_path = resolved_root / "workflows"
+        try:
+            config = _load_tool_config(resolved_root / TOOL_CONFIG_FILENAME)
+        except ValueError:
+            config = {}
+        asset_config = config.get("assetGit")
+        asset_root_value = (
+            asset_config.get("root")
+            if isinstance(asset_config, dict)
+            else None
+        )
+        if isinstance(asset_root_value, str) and asset_root_value.strip():
+            asset_candidate = Path(asset_root_value.strip())
+            if not asset_candidate.is_absolute():
+                asset_candidate = resolved_root / asset_candidate
+        else:
+            asset_candidate = resolved_root
+        try:
+            asset_candidate.mkdir(parents=True, exist_ok=True)
+            resolved_asset_root = asset_candidate.resolve(strict=True)
+        except (OSError, RuntimeError, ValueError) as error:
+            raise BridgeError(
+                HTTPStatus.UNPROCESSABLE_ENTITY,
+                "tool_root_invalid_asset_git_root",
+                "자산 Git 루트 폴더를 준비할 수 없습니다.",
+            ) from error
+        if not resolved_asset_root.is_dir():
+            raise BridgeError(
+                HTTPStatus.UNPROCESSABLE_ENTITY,
+                "tool_root_invalid_asset_git_root",
+                "자산 Git 루트는 실제 폴더여야 합니다.",
+            )
+
+        workflows_path = resolved_asset_root / "workflows"
         try:
             workflows_path.mkdir(parents=True, exist_ok=True)
             for workflow_subdir in ("list", "current", "temp"):
@@ -854,7 +903,7 @@ class BridgeState:
                 "tool_root_invalid_workflows",
                 "실행 도구 폴더의 workflows 폴더를 준비할 수 없습니다.",
             ) from error
-        if not resolved_workflows.is_dir() or resolved_workflows.parent != resolved_root:
+        if not resolved_workflows.is_dir() or resolved_workflows.parent != resolved_asset_root:
             raise BridgeError(
                 HTTPStatus.UNPROCESSABLE_ENTITY,
                 "tool_root_invalid_workflows",
@@ -862,7 +911,9 @@ class BridgeState:
             )
 
         self.root = resolved_root
+        self.asset_root = resolved_asset_root
         self.workflows_dir = resolved_workflows
+        self.asset_registry_path = resolved_asset_root / ASSET_REGISTRY_FILENAME
         self.catalog_path = resolved_root / "catalog.json"
         self.catalog_script = catalog_script
         self.python_executable = resolved_root / "python-3.10.0-embed-amd64" / "python.exe"
@@ -874,7 +925,7 @@ class BridgeState:
             ("node-pack", "custom_nodes"),
             ("model-pack", "models"),
         ):
-            package_root = resolved_root / directory_name
+            package_root = resolved_asset_root / directory_name
             try:
                 if _path_is_linklike(package_root):
                     raise OSError("symbolic-link package root")
@@ -888,7 +939,7 @@ class BridgeState:
                 ) from error
             if (
                 not resolved_package_root.is_dir()
-                or resolved_package_root.parent != resolved_root
+                or resolved_package_root.parent != resolved_asset_root
             ):
                 raise BridgeError(
                     HTTPStatus.UNPROCESSABLE_ENTITY,
@@ -1019,15 +1070,10 @@ class BridgeState:
         )
 
     def list_local_custom_node_packages(self) -> list[dict[str, Any]]:
-        """List publishable top-level custom_nodes directories from catalog."""
+        """List top-level custom_nodes directories and catalog-confirmed nodes."""
 
         with self.catalog_lock:
             catalog = self._read_catalog_unlocked()
-        registry_ids = {
-            package["id"]
-            for package in self.list_packages()
-            if package["kind"] == "node-pack"
-        }
         node_types_by_package: dict[str, list[str]] = {}
         for node in catalog.get("nodes", []):
             if not isinstance(node, dict):
@@ -1048,9 +1094,17 @@ class BridgeState:
 
         package_root = self.package_roots["node-pack"]
         packages: list[dict[str, Any]] = []
-        for package_id, node_types in node_types_by_package.items():
-            if package_id in registry_ids:
-                continue
+        package_ids: set[str] = set(node_types_by_package)
+        if package_root.is_dir():
+            for candidate in package_root.iterdir():
+                if not candidate.is_dir() or _path_is_linklike(candidate):
+                    continue
+                try:
+                    package_ids.add(_validate_package_id(candidate.name))
+                except BridgeError:
+                    continue
+        for package_id in sorted(package_ids, key=str.casefold):
+            node_types = node_types_by_package.get(package_id, [])
             candidate = package_root / package_id
             if (
                 not candidate.is_dir()
@@ -1404,7 +1458,7 @@ class BridgeState:
                 installed_at = datetime.now(timezone.utc).isoformat()
                 package = {
                     **metadata,
-                    "installPath": target.relative_to(self.root).as_posix(),
+                    "installPath": target.relative_to(self.asset_root).as_posix(),
                     "installedAt": installed_at,
                 }
                 (staging / PACKAGE_MANIFEST_FILENAME).write_text(
@@ -1878,7 +1932,7 @@ class BridgeState:
         install_path = value.get("installPath")
         expected_path = (
             self.package_roots[metadata["kind"]] / metadata["id"]
-        ).relative_to(self.root).as_posix()
+        ).relative_to(self.asset_root).as_posix()
         if install_path != expected_path:
             raise ValueError("invalid install path")
         installed_at = value.get("installedAt")
@@ -1924,8 +1978,7 @@ class BridgeState:
             ) as temporary:
                 temporary_path = Path(temporary.name)
                 temporary.write(payload)
-                temporary.flush()
-                os.fsync(temporary.fileno())
+                _flush_file(temporary)
             os.replace(temporary_path, self.package_registry_path)
             temporary_path = None
         except OSError as error:
@@ -1937,6 +1990,151 @@ class BridgeState:
         finally:
             if temporary_path is not None:
                 self._remove_local_path(temporary_path)
+
+    def _read_asset_registry_unlocked(self) -> dict[str, dict[str, Any]]:
+        if not self.asset_registry_path.exists():
+            return {}
+        try:
+            if self.asset_registry_path.stat().st_size > 10 * 1024 * 1024:
+                raise ValueError("asset registry too large")
+            document = json.loads(self.asset_registry_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as error:
+            raise BridgeError(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                "asset_registry_invalid",
+                "자산 기준 정보 파일을 읽을 수 없습니다.",
+            ) from error
+        if (
+            not isinstance(document, dict)
+            or document.get("schema") != "infrax.asset-registry.v1"
+            or not isinstance(document.get("assets"), dict)
+        ):
+            raise BridgeError(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                "asset_registry_invalid",
+                "자산 기준 정보 파일 형식이 올바르지 않습니다.",
+            )
+        assets: dict[str, dict[str, Any]] = {}
+        for key, value in document["assets"].items():
+            if not isinstance(key, str) or self._safe_workspace_import_path(key) is None:
+                continue
+            if isinstance(value, dict):
+                assets[key] = {str(item_key): item_value for item_key, item_value in value.items()}
+        return assets
+
+    def _write_asset_registry_unlocked(self, assets: dict[str, dict[str, Any]]) -> None:
+        payload = (
+            json.dumps(
+                {
+                    "schema": "infrax.asset-registry.v1",
+                    "toolVersion": TOOL_VERSION,
+                    "assets": assets,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n"
+        ).encode("utf-8")
+        temporary_path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="wb",
+                prefix=f".{ASSET_REGISTRY_FILENAME}.",
+                suffix=".tmp",
+                dir=self.asset_root,
+                delete=False,
+            ) as temporary:
+                temporary_path = Path(temporary.name)
+                temporary.write(payload)
+                _flush_file(temporary)
+            os.replace(temporary_path, self.asset_registry_path)
+            temporary_path = None
+        except OSError as error:
+            raise BridgeError(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                "asset_registry_write_failed",
+                "자산 기준 정보 파일을 안전하게 저장하지 못했습니다.",
+            ) from error
+        finally:
+            if temporary_path is not None:
+                self._remove_local_path(temporary_path)
+
+    def _current_asset_git_commit(self) -> str | None:
+        if not (self.asset_root / ".git").exists():
+            return None
+        try:
+            result = self._run_workflow_git(["rev-parse", "--verify", "HEAD"], check=False, timeout=3.0)
+        except BridgeError:
+            return None
+        return result["stdout"].strip() if result["returnCode"] == 0 else None
+
+    def _remote_asset_git_commit_for_path(self, relative_path: str) -> str | None:
+        if not (self.asset_root / ".git").exists():
+            return None
+        try:
+            remote_result = self._run_workflow_git(["remote", "get-url", "origin"], check=False, timeout=5.0)
+            if remote_result["returnCode"] != 0 or not remote_result["stdout"].strip():
+                return None
+            branch_result = self._run_workflow_git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], check=False, timeout=5.0)
+            if branch_result["returnCode"] != 0 or not branch_result["stdout"].strip():
+                return None
+            upstream = branch_result["stdout"].strip()
+            fetch_result = self._run_workflow_git(["fetch", "--quiet", "--no-tags", "origin"], check=False, timeout=10.0)
+            if fetch_result["returnCode"] != 0:
+                return None
+            commit_result = self._run_workflow_git(["log", "-n", "1", "--format=%H", upstream, "--", relative_path], check=False, timeout=5.0)
+        except BridgeError:
+            return None
+        return commit_result["stdout"].strip() if commit_result["returnCode"] == 0 and commit_result["stdout"].strip() else None
+
+    def _workflow_asset_status(self, relative_path: str, asset: Any) -> str:
+        if not isinstance(asset, dict):
+            return "local"
+        explicit_status = asset.get("status")
+        if explicit_status in {"local", "marketplaceImported", "registered", "dirty", "conflict"}:
+            status = explicit_status
+        elif asset.get("marketplaceId"):
+            status = "marketplaceImported"
+        else:
+            status = "local"
+        if status in {"marketplaceImported", "registered"} and asset.get("baseCommit"):
+            try:
+                dirty_result = self._run_workflow_git(["diff", "--quiet", "--", relative_path], check=False, timeout=5.0)
+                staged_result = self._run_workflow_git(["diff", "--cached", "--quiet", "--", relative_path], check=False, timeout=5.0)
+            except BridgeError:
+                return status
+            if dirty_result["returnCode"] != 0 or staged_result["returnCode"] != 0:
+                return "dirty"
+        return status
+
+    def _ensure_workflow_asset_revision_current(
+        self,
+        relative_path: str,
+        *,
+        marketplace_id: str = "",
+        expected_marketplace_revision: str = "",
+    ) -> None:
+        if not expected_marketplace_revision:
+            return
+        registry = self._read_asset_registry_unlocked()
+        asset = registry.get(relative_path)
+        if not isinstance(asset, dict):
+            return
+        if marketplace_id and asset.get("marketplaceId") not in {"", marketplace_id}:
+            return
+        base_revision = asset.get("marketplaceRevision")
+        if base_revision and base_revision != expected_marketplace_revision:
+            raise BridgeError(
+                HTTPStatus.CONFLICT,
+                "workflow_asset_revision_conflict",
+                "이 워크플로우는 가져온 뒤 Marketplace에 더 최신본이 있습니다. 최신본을 받은 뒤 수정하거나, 새 이름으로 저장하세요.",
+                details={
+                    "path": relative_path,
+                    "marketplaceId": asset.get("marketplaceId"),
+                    "baseRevision": base_revision,
+                    "currentRevision": expected_marketplace_revision,
+                },
+            )
 
     def _rollback_package_install(
         self,
@@ -2056,7 +2254,7 @@ class BridgeState:
             }
             files: list[dict[str, Any]] = []
             for relative_path in self._workspace_export_paths():
-                source_path = self.root / relative_path
+                source_path = self._workspace_path_base(relative_path) / relative_path
                 try:
                     stat = source_path.stat()
                 except OSError:
@@ -2124,7 +2322,7 @@ class BridgeState:
                         if relative_path is None:
                             skipped.append(info.filename)
                             continue
-                        target_path = self.root / relative_path
+                        target_path = self._workspace_path_base(relative_path) / relative_path
                         target_path.parent.mkdir(parents=True, exist_ok=True)
                         temporary_path: Path | None = None
                         try:
@@ -2175,14 +2373,14 @@ class BridgeState:
         )
         files: list[Path] = []
         for relative_root in allowed_roots:
-            root = self.root / relative_root
+            root = self._workspace_path_base(relative_root) / relative_root
             if not root.exists():
                 continue
             for candidate in root.rglob("*"):
                 if _path_is_linklike(candidate) or not candidate.is_file():
                     continue
                 try:
-                    relative_path = candidate.relative_to(self.root)
+                    relative_path = candidate.relative_to(self._workspace_path_base(relative_root))
                 except ValueError:
                     continue
                 if self._safe_workspace_import_path(relative_path.as_posix()) is not None:
@@ -2197,6 +2395,11 @@ class BridgeState:
             if candidate.is_file() and not _path_is_linklike(candidate):
                 files.append(Path(name))
         return sorted(set(files), key=lambda item: item.as_posix().casefold())
+
+    def _workspace_path_base(self, relative_path: Path) -> Path:
+        if relative_path.parts[:1] in {("workflows",), ("custom_nodes",), ("models",)}:
+            return self.asset_root
+        return self.root
 
     @staticmethod
     def _safe_workspace_import_path(filename: str) -> Path | None:
@@ -2237,6 +2440,7 @@ class BridgeState:
     def list_workflows(self) -> list[dict[str, Any]]:
         with self.workflow_lock:
             workflows: list[dict[str, Any]] = []
+            asset_registry = self._read_asset_registry_unlocked()
             list_dir = self._list_workflow_dir()
             list_dir.mkdir(parents=True, exist_ok=True)
             for candidate in list_dir.iterdir():
@@ -2249,12 +2453,17 @@ class BridgeState:
                 except (BridgeError, OSError, UnicodeError, json.JSONDecodeError):
                     continue
                 workflow_name = data.get("name") if isinstance(data, dict) else None
+                relative_path = f"workflows/list/{candidate.name}"
+                asset = asset_registry.get(relative_path, {})
+                asset_status = self._workflow_asset_status(relative_path, asset)
                 workflows.append(
                     {
                         "fileName": candidate.name,
                         "name": workflow_name if isinstance(workflow_name, str) else candidate.stem,
                         "size": stat.st_size,
                         "modifiedAt": _iso_timestamp(stat.st_mtime),
+                        "assetStatus": asset_status,
+                        "asset": asset if isinstance(asset, dict) else {},
                     }
                 )
             return sorted(workflows, key=lambda item: item["fileName"].casefold())
@@ -2405,6 +2614,174 @@ class BridgeState:
             path.unlink()
         return {"ok": True, "fileName": filename}
 
+    def workflow_git_pull(self) -> dict[str, Any]:
+        with self.workflow_lock:
+            result = self._run_workflow_git(["pull", "--ff-only"])
+            return {
+                "ok": True,
+                "git": result,
+                "workflows": self.list_workflows(),
+                "tempWorkflows": self.list_temp_workflows(),
+            }
+
+    def install_marketplace_workflow_asset(
+        self,
+        filename: str,
+        workflow: Any,
+        *,
+        marketplace_id: str = "",
+        marketplace_revision: str = "",
+        overwrite: bool = False,
+    ) -> dict[str, Any]:
+        self._validate_workflow_shape(workflow)
+        safe_name = _safe_workflow_filename(filename)
+        save_result = self.save_workflow(
+            safe_name,
+            workflow,
+            overwrite=overwrite,
+            mirror_current_to_list=False,
+        )
+        relative_path = f"workflows/list/{safe_name}"
+        with self.workflow_lock:
+            registry = self._read_asset_registry_unlocked()
+            registry[relative_path] = {
+                "type": "workflow",
+                "path": relative_path,
+                "status": "marketplaceImported",
+                "marketplaceId": str(marketplace_id or ""),
+                "marketplaceRevision": str(marketplace_revision or ""),
+                "baseCommit": self._current_asset_git_commit(),
+                "installedAt": datetime.now(timezone.utc).isoformat(),
+            }
+            self._write_asset_registry_unlocked(registry)
+            return {
+                "ok": True,
+                **save_result,
+                "path": relative_path,
+                "asset": registry[relative_path],
+            }
+
+    def mark_workflow_asset_synced(
+        self,
+        filename: str,
+        *,
+        marketplace_id: str = "",
+        marketplace_revision: str = "",
+    ) -> dict[str, Any]:
+        path = self._workflow_path(filename)
+        if path.parent != self._list_workflow_dir():
+            raise BridgeError(
+                HTTPStatus.BAD_REQUEST,
+                "invalid_workflow_asset_path",
+                "동기화 표시는 workflows/list JSON 파일에만 사용할 수 있습니다.",
+            )
+        relative_path = path.relative_to(self.asset_root).as_posix()
+        with self.workflow_lock:
+            registry = self._read_asset_registry_unlocked()
+            current = registry.get(relative_path, {})
+            registry[relative_path] = {
+                **(current if isinstance(current, dict) else {}),
+                "type": "workflow",
+                "path": relative_path,
+                "status": "registered",
+                "marketplaceId": str(marketplace_id or current.get("marketplaceId", "")),
+                "marketplaceRevision": str(marketplace_revision or current.get("marketplaceRevision", "")),
+                "baseCommit": self._current_asset_git_commit(),
+                "syncedAt": datetime.now(timezone.utc).isoformat(),
+            }
+            self._write_asset_registry_unlocked(registry)
+            return {"ok": True, "path": relative_path, "asset": registry[relative_path]}
+
+    def check_workflow_asset_update(self, filename: str) -> dict[str, Any]:
+        path = self._workflow_path(filename)
+        if path.parent != self._list_workflow_dir():
+            raise BridgeError(
+                HTTPStatus.BAD_REQUEST,
+                "invalid_workflow_asset_path",
+                "업데이트 확인은 workflows/list JSON 파일에만 사용할 수 있습니다.",
+            )
+        relative_path = path.relative_to(self.asset_root).as_posix()
+        with self.workflow_lock:
+            registry = self._read_asset_registry_unlocked()
+            asset = registry.get(relative_path, {})
+            base_commit = asset.get("baseCommit") if isinstance(asset, dict) else None
+            current_commit = self._current_asset_git_commit()
+            remote_commit = self._remote_asset_git_commit_for_path(relative_path)
+            has_remote_update = bool(
+                base_commit
+                and remote_commit
+                and remote_commit != base_commit
+            )
+            return {
+                "ok": True,
+                "path": relative_path,
+                "asset": asset if isinstance(asset, dict) else {},
+                "baseCommit": base_commit,
+                "currentCommit": current_commit,
+                "remoteCommit": remote_commit,
+                "hasRemoteUpdate": has_remote_update,
+            }
+
+    def workflow_git_commit(
+        self,
+        filename: str,
+        *,
+        message: str = "",
+        push: bool = True,
+        marketplace_id: str = "",
+        expected_marketplace_revision: str = "",
+    ) -> dict[str, Any]:
+        path = self._workflow_path(filename)
+        if path.parent != self._list_workflow_dir():
+            raise BridgeError(
+                HTTPStatus.BAD_REQUEST,
+                "invalid_workflow_git_path",
+                "Git에 반영할 워크플로우는 workflows/list의 JSON 파일이어야 합니다.",
+            )
+        relative_path = path.relative_to(self.asset_root).as_posix()
+        with self.workflow_lock:
+            self._ensure_workflow_asset_revision_current(
+                relative_path,
+                marketplace_id=marketplace_id,
+                expected_marketplace_revision=expected_marketplace_revision,
+            )
+            self._run_workflow_git(["add", "--", relative_path])
+            diff_check = self._run_workflow_git(
+                ["diff", "--cached", "--quiet", "--", relative_path],
+                check=False,
+            )
+            committed = diff_check["returnCode"] != 0
+            commit_result: dict[str, Any] | None = None
+            push_result: dict[str, Any] | None = None
+            if committed:
+                commit_message = message.strip() or f"Update workflow {path.stem}"
+                commit_result = self._run_workflow_git(["commit", "-m", commit_message])
+                if push:
+                    push_result = self._run_workflow_git(["push"])
+            if marketplace_id:
+                registry = self._read_asset_registry_unlocked()
+                current = registry.get(relative_path, {})
+                registry[relative_path] = {
+                    **(current if isinstance(current, dict) else {}),
+                    "type": "workflow",
+                    "path": relative_path,
+                    "status": "registered",
+                    "marketplaceId": marketplace_id,
+                    "marketplaceRevision": expected_marketplace_revision or (current.get("marketplaceRevision", "") if isinstance(current, dict) else ""),
+                    "baseCommit": self._current_asset_git_commit(),
+                    "committedAt": datetime.now(timezone.utc).isoformat(),
+                }
+                self._write_asset_registry_unlocked(registry)
+            return {
+                "ok": True,
+                "fileName": filename,
+                "path": relative_path,
+                "committed": committed,
+                "commit": commit_result,
+                "push": push_result,
+                "status": self._workflow_git_status(),
+            }
+
     def save_workflow(
         self,
         filename: str,
@@ -2457,8 +2834,7 @@ class BridgeState:
                 ) as temp_file:
                     temp_path = Path(temp_file.name)
                     temp_file.write(payload)
-                    temp_file.flush()
-                    os.fsync(temp_file.fileno())
+                    _flush_file(temp_file)
                 if mirror_current_to_list and path.parent == self._current_workflow_dir():
                     list_path = self._list_workflow_dir() / path.name
                     list_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2468,8 +2844,7 @@ class BridgeState:
                     with tempfile.NamedTemporaryFile(mode="wb", prefix=f".{list_path.name}.", suffix=".tmp", dir=list_path.parent, delete=False) as list_temp:
                         list_temp_path = Path(list_temp.name)
                         list_temp.write(list_payload)
-                        list_temp.flush()
-                        os.fsync(list_temp.fileno())
+                        _flush_file(list_temp)
                 os.replace(temp_path, path)
                 temp_path = None
                 if list_path is not None and list_temp_path is not None:
@@ -2565,8 +2940,7 @@ class BridgeState:
                 ) as prepared_file:
                     prepared_path = Path(prepared_file.name)
                     prepared_file.write(payload)
-                    prepared_file.flush()
-                    os.fsync(prepared_file.fileno())
+                    _flush_file(prepared_file)
 
                 for child in current_dir.iterdir():
                     if (
@@ -2666,8 +3040,7 @@ class BridgeState:
                 with tempfile.NamedTemporaryFile(mode="wb", prefix=f".{current_path.name}.", suffix=".tmp", dir=current_path.parent, delete=False) as prepared:
                     prepared_path = Path(prepared.name)
                     prepared.write(payload)
-                    prepared.flush()
-                    os.fsync(prepared.fileno())
+                    _flush_file(prepared)
                 os.replace(prepared_path, current_path)
                 prepared_path = None
             except OSError as error:
@@ -2692,7 +3065,7 @@ class BridgeState:
                         "workflow_not_found",
                         f"워크플로우 파일을 찾을 수 없습니다: {filename}",
                     )
-                relative_path = path.relative_to(self.root)
+                relative_path = path.relative_to(self.asset_root)
                 completed = self._run_python(
                     self.main_script,
                     str(relative_path),
@@ -2718,7 +3091,7 @@ class BridgeState:
                         "workflow_not_found",
                         f"워크플로우 파일을 찾을 수 없습니다: {filename}",
                     )
-                relative_path = path.relative_to(self.root)
+                relative_path = path.relative_to(self.asset_root)
             yield {"type": "run", "status": "started", "fileName": filename}
             yield from self._run_python_stream(
                 self.main_script,
@@ -2726,6 +3099,75 @@ class BridgeState:
                 timeout=self.run_timeout,
                 python_executable=self.python_executable,
             )
+
+    def _workflow_git_status(self) -> dict[str, Any]:
+        if not (self.asset_root / ".git").exists():
+            return {"enabled": False, "reason": "asset_root_not_git_repository"}
+        result = self._run_workflow_git(
+            ["status", "--short", "--branch", "--", "workflows/list"],
+            check=False,
+        )
+        return {
+            "enabled": result["returnCode"] == 0,
+            "returnCode": result["returnCode"],
+            "stdout": result["stdout"],
+            "stderr": result["stderr"],
+        }
+
+    def _run_workflow_git(
+        self,
+        args: list[str],
+        *,
+        check: bool = True,
+        timeout: float = 120.0,
+    ) -> dict[str, Any]:
+        if not (self.asset_root / ".git").exists():
+            raise BridgeError(
+                HTTPStatus.CONFLICT,
+                "workflow_git_not_configured",
+                "실행 도구 폴더가 Git 저장소가 아닙니다.",
+            )
+        command = ["git", "-c", f"safe.directory={self.asset_root}", *args]
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=self.asset_root,
+                text=True,
+                capture_output=True,
+                timeout=timeout,
+                shell=False,
+            )
+        except FileNotFoundError as error:
+            raise BridgeError(
+                HTTPStatus.CONFLICT,
+                "git_not_found",
+                "Git 실행 파일을 찾을 수 없습니다.",
+            ) from error
+        except subprocess.TimeoutExpired as error:
+            raise BridgeError(
+                HTTPStatus.GATEWAY_TIMEOUT,
+                "workflow_git_timeout",
+                "Git 명령 실행 시간이 초과되었습니다.",
+                details={
+                    "command": command,
+                    "stdout": _limited_output(error.stdout),
+                    "stderr": _limited_output(error.stderr),
+                },
+            ) from error
+        result = {
+            "command": command,
+            "returnCode": completed.returncode,
+            "stdout": _limited_output(completed.stdout),
+            "stderr": _limited_output(completed.stderr),
+        }
+        if check and completed.returncode != 0:
+            raise BridgeError(
+                HTTPStatus.BAD_GATEWAY,
+                "workflow_git_failed",
+                "Git 명령 실행에 실패했습니다.",
+                details=result,
+            )
+        return result
 
     def _workflow_path(self, filename: str) -> Path:
         relative_path = _safe_workflow_relative_path(filename)
@@ -2906,6 +3348,22 @@ class BridgeState:
                 "워크플로우 JSON에는 nodes와 links 배열이 필요합니다.",
             )
 
+    def _python_environment(self, *, run_progress: bool = False) -> dict[str, str]:
+        environment = os.environ.copy()
+        environment["PYTHONIOENCODING"] = "utf-8"
+        environment["PYTHONUTF8"] = "1"
+        environment["INFRAX_ASSET_ROOT"] = os.fspath(self.asset_root)
+        if run_progress:
+            environment["INFRAX_RUN_PROGRESS"] = "1"
+        asset_root = os.fspath(self.asset_root)
+        existing_path = environment.get("PYTHONPATH")
+        environment["PYTHONPATH"] = (
+            asset_root
+            if not existing_path
+            else asset_root + os.pathsep + existing_path
+        )
+        return environment
+
     def _run_python(
         self,
         script: Path,
@@ -2916,6 +3374,7 @@ class BridgeState:
         environment = os.environ.copy()
         environment["PYTHONIOENCODING"] = "utf-8"
         environment["PYTHONUTF8"] = "1"
+        environment["INFRAX_ASSET_ROOT"] = os.fspath(self.asset_root)
         executable = python_executable if python_executable and python_executable.is_file() else Path(sys.executable)
         try:
             return subprocess.run(
@@ -2954,10 +3413,7 @@ class BridgeState:
         timeout: float,
         python_executable: Path | None = None,
     ):
-        environment = os.environ.copy()
-        environment["PYTHONIOENCODING"] = "utf-8"
-        environment["PYTHONUTF8"] = "1"
-        environment["INFRAX_RUN_PROGRESS"] = "1"
+        environment = self._python_environment(run_progress=True)
         executable = python_executable if python_executable and python_executable.is_file() else Path(sys.executable)
         try:
             process = subprocess.Popen(
@@ -3464,6 +3920,63 @@ class StudioBridgeHandler(BaseHTTPRequestHandler):
                         "tempWorkflows": state.list_temp_workflows(),
                         "currentWorkflow": state.current_workflow_state(),
                     },
+                )
+                return
+            if method == "GET" and segments == ["workflow-git", "status"]:
+                self._send_json(HTTPStatus.OK, {"ok": True, "status": state.workflow_git_status()})
+                return
+            if method == "POST" and segments == ["workflow-git", "pull"]:
+                self._ensure_empty_or_json_body()
+                self._send_json(HTTPStatus.OK, state.workflow_git_pull())
+                return
+            if method == "POST" and segments == ["workflow-git", "commit"]:
+                request = self._read_json_body()
+                self._send_json(
+                    HTTPStatus.OK,
+                    state.workflow_git_commit(
+                        str(request.get("fileName") or ""),
+                        message=str(request.get("message") or ""),
+                        push=bool(request.get("push", True)),
+                        marketplace_id=str(request.get("marketplaceId") or ""),
+                        expected_marketplace_revision=str(request.get("expectedMarketplaceRevision") or ""),
+                    ),
+                )
+                return
+            if method == "POST" and segments == ["workflow-assets", "install"]:
+                request = self._read_json_body()
+                if not isinstance(request, dict):
+                    raise BridgeError(HTTPStatus.BAD_REQUEST, "invalid_json", "요청 본문은 JSON 객체여야 합니다.")
+                self._send_json(
+                    HTTPStatus.OK,
+                    state.install_marketplace_workflow_asset(
+                        str(request.get("fileName") or ""),
+                        request.get("workflow"),
+                        marketplace_id=str(request.get("marketplaceId") or ""),
+                        marketplace_revision=str(request.get("marketplaceRevision") or ""),
+                        overwrite=bool(request.get("overwrite", False)),
+                    ),
+                )
+                return
+            if method == "POST" and segments == ["workflow-assets", "check-update"]:
+                request = self._read_json_body()
+                if not isinstance(request, dict):
+                    raise BridgeError(HTTPStatus.BAD_REQUEST, "invalid_json", "요청 본문은 JSON 객체여야 합니다.")
+                self._send_json(
+                    HTTPStatus.OK,
+                    state.check_workflow_asset_update(str(request.get("fileName") or "")),
+                )
+                return
+            if method == "POST" and segments == ["workflow-assets", "mark-synced"]:
+                request = self._read_json_body()
+                if not isinstance(request, dict):
+                    raise BridgeError(HTTPStatus.BAD_REQUEST, "invalid_json", "요청 본문은 JSON 객체여야 합니다.")
+                self._send_json(
+                    HTTPStatus.OK,
+                    state.mark_workflow_asset_synced(
+                        str(request.get("fileName") or ""),
+                        marketplace_id=str(request.get("marketplaceId") or ""),
+                        marketplace_revision=str(request.get("marketplaceRevision") or ""),
+                    ),
                 )
                 return
             if method == "POST" and segments == ["workflows", "current", "reset"]:

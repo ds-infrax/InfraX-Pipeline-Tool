@@ -1,3 +1,6 @@
 {
-  "platformApiBase": "https://106.254.226.206/pipeline/api"
+  "platformApiBase": "https://106.254.226.206/pipeline/api",
+  "assetGit": {
+    "root": "assets-repo"
+  }
 }

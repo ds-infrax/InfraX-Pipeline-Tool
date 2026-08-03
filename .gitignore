@@ -18,6 +18,8 @@ env/
 catalog.json
 *.egg-info/
 
+/assets-repo/
+
 /custom_nodes/*
 !/custom_nodes/sample/
 !/custom_nodes/sample/**

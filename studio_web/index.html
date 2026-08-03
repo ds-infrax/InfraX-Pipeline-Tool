@@ -72,7 +72,7 @@
             <span class="material-symbols-outlined">folder_open</span>
             <span>파일</span>
           </button>
-          <button class="rail-button" id="marketplaceBtn" type="button" title="등록된 Marketplace 목록 보기">
+          <button class="rail-button icon-tab" id="marketplaceBtn" type="button" data-target="marketplaceSection" title="등록된 Marketplace 목록 보기">
             <span class="material-symbols-outlined">storefront</span>
             <span>마켓</span>
           </button>
@@ -222,6 +222,25 @@
               <input id="nodeSearchInput" type="search" placeholder="이름 또는 타입 검색" autocomplete="off" />
             </div>
             <div class="nav-list node-library-list" id="nodePalette"></div>
+          </section>
+
+          <section class="section sidebar-hidden" id="marketplaceSection">
+            <div class="section-heading">
+              <div>
+                <span class="eyebrow">MARKETPLACE</span>
+                <h2>마켓</h2>
+              </div>
+              <button class="icon-button compact" id="refreshSidebarMarketplaceBtn" type="button" title="Marketplace 목록 새로고침" aria-label="Marketplace 목록 새로고침">
+                <span class="material-symbols-outlined">refresh</span>
+              </button>
+            </div>
+            <p class="section-description">Marketplace에 등록된 워크플로우, 노드, 모델을 탭별로 확인합니다.</p>
+            <div class="sidebar-market-tabs" role="tablist" aria-label="마켓 분류">
+              <button class="sidebar-market-tab active" type="button" data-marketplace-side-tab="workspace">워크플로우</button>
+              <button class="sidebar-market-tab" type="button" data-marketplace-side-tab="module">노드</button>
+              <button class="sidebar-market-tab" type="button" data-marketplace-side-tab="model">모델</button>
+            </div>
+            <div class="nav-list sidebar-market-list" id="sidebarMarketplaceList" aria-live="polite"></div>
           </section>
         </div>
       </aside>
