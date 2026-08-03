@@ -1790,12 +1790,13 @@ class StudioBridgeTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(body["fileName"], "current/first.json")
         self.assertEqual(body["sourceFileName"], "first.json")
+        self.assertEqual(body["sourceWorkflow"], "list/first.json")
         self.assertTrue((current_dir / "first.json").is_file())
         self.assertFalse((current_dir / "old.json").exists())
         self.assertFalse((temp_dir / "old.json").exists())
         self.assertEqual(
             json.loads((current_dir / "first.json").read_text(encoding="utf-8")),
-            first,
+            {**first, "_infrax": {"sourceWorkflow": "list/first.json"}},
         )
 
         current_encoded = urllib.parse.quote("current/first.json", safe="")
@@ -1809,7 +1810,7 @@ class StudioBridgeTest(unittest.TestCase):
         self.assertEqual(body["fileName"], "current/first.json")
         self.assertEqual(
             json.loads((current_dir / "first.json").read_text(encoding="utf-8")),
-            updated,
+            {**updated, "_infrax": {"sourceWorkflow": "list/first.json"}},
         )
         self.assertEqual(
             json.loads((self.root / "workflows" / "list" / "first.json").read_text(encoding="utf-8")),
@@ -1827,7 +1828,7 @@ class StudioBridgeTest(unittest.TestCase):
         self.assertEqual(body["fileName"], "current/first.json")
         self.assertEqual(
             json.loads((current_dir / "first.json").read_text(encoding="utf-8")),
-            draft_only,
+            {**draft_only, "_infrax": {"sourceWorkflow": "list/first.json"}},
         )
         self.assertEqual(
             json.loads((self.root / "workflows" / "list" / "first.json").read_text(encoding="utf-8")),
@@ -1908,6 +1909,233 @@ class StudioBridgeTest(unittest.TestCase):
         status, _, body = self.request("GET", "/workflows")
         self.assertEqual(status, 200)
         self.assertEqual(body["tempWorkflows"], [])
+
+    def test_clone_current_keeps_copy_in_current_and_does_not_change_list(self):
+        original = {"name": "Original", "nodes": [{"id": 1}], "links": []}
+        renamed = {"name": "Renamed", "nodes": [{"id": 2}], "links": []}
+        self.request("PUT", "/workflows/original.json", payload=original)
+        self.request("POST", "/workflows/original.json/activate", payload={})
+
+        status, _, body = self.request(
+            "POST",
+            "/workflows/current/save-as",
+            payload={"fileName": "current/renamed.json", "workflow": renamed},
+        )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(body["fileName"], "current/renamed.json")
+        self.assertIsNone(body["sourceWorkflow"])
+        self.assertEqual(len(body["archived"]), 1)
+        current_dir = self.root / "workflows" / "current"
+        self.assertEqual(
+            [path.name for path in current_dir.glob("*.json")],
+            ["renamed.json"],
+        )
+        self.assertEqual(json.loads((current_dir / "renamed.json").read_text(encoding="utf-8")), renamed)
+        self.assertEqual(
+            json.loads((self.root / "workflows" / "list" / "original.json").read_text(encoding="utf-8")),
+            original,
+        )
+
+    def test_cloned_current_reset_returns_to_original_source_workflow(self):
+        original = {"name": "Original", "nodes": [{"id": 1}], "links": []}
+        renamed = {"name": "Renamed", "nodes": [{"id": 2}], "links": []}
+        self.request("PUT", "/workflows/original.json", payload=original)
+        self.request("POST", "/workflows/original.json/activate", payload={})
+
+        status, _, body = self.request(
+            "POST",
+            "/workflows/current/save-as",
+            payload={
+                "fileName": "current/renamed.json",
+                "workflow": renamed,
+                "resetWorkflow": "list/original.json",
+            },
+        )
+
+        self.assertEqual(status, 200)
+        self.assertIsNone(body["sourceWorkflow"])
+        self.assertEqual(body["resetWorkflow"], "list/original.json")
+        self.assertEqual(
+            json.loads((self.root / "workflows" / "current" / "renamed.json").read_text(encoding="utf-8")),
+            {**renamed, "_infrax": {"resetWorkflow": "list/original.json"}},
+        )
+
+        status, _, body = self.request("POST", "/workflows/current/reset", payload={})
+
+        self.assertEqual(status, 200)
+        self.assertEqual(body["fileName"], "current/original.json")
+        self.assertEqual(body["sourceWorkflow"], "list/original.json")
+        self.assertEqual(body["workflow"], {**original, "_infrax": {"sourceWorkflow": "list/original.json"}})
+        self.assertFalse((self.root / "workflows" / "current" / "renamed.json").exists())
+
+    def test_current_state_and_reset_follow_embedded_source_metadata(self):
+        original = {"name": "Original", "nodes": [{"id": 1}], "links": []}
+        changed = {"name": "Changed", "nodes": [{"id": 9}], "links": []}
+        self.request("PUT", "/workflows/original.json", payload=original)
+        self.request("POST", "/workflows/original.json/activate", payload={})
+        encoded = urllib.parse.quote("current/original.json", safe="")
+        self.request("PUT", f"/workflows/{encoded}", payload=changed, extra_headers={"X-InfraX-Current-Only": "true"})
+
+        status, _, body = self.request("GET", "/workflows")
+        self.assertEqual(status, 200)
+        expected_changed = {**changed, "_infrax": {"sourceWorkflow": "list/original.json"}}
+        self.assertEqual(body["currentWorkflow"]["workflow"], expected_changed)
+        self.assertEqual(body["currentWorkflow"]["sourceWorkflow"], "list/original.json")
+
+        status, _, body = self.request("POST", "/workflows/current/reset", payload={})
+        self.assertEqual(status, 200)
+        self.assertEqual(body["workflow"], {**original, "_infrax": {"sourceWorkflow": "list/original.json"}})
+        self.assertEqual(body["sourceWorkflow"], "list/original.json")
+
+    def test_unlinked_current_reset_keeps_filename_and_blanks_content(self):
+        draft = {"name": "Draft", "nodes": [{"id": 3}], "links": []}
+        status, _, _ = self.request(
+            "POST", "/workflows/current/save-as",
+            payload={"fileName": "current/my-draft.json", "workflow": draft},
+        )
+        self.assertEqual(status, 200)
+        status, _, body = self.request("POST", "/workflows/current/reset", payload={})
+        self.assertEqual(status, 200)
+        self.assertEqual(body["fileName"], "current/my-draft.json")
+        self.assertEqual(body["workflow"]["nodes"], [])
+        self.assertEqual(body["workflow"]["links"], [])
+        self.assertIsNone(body["sourceWorkflow"])
+
+    def test_save_current_as_rejects_invalid_workflow_before_archiving(self):
+        original = {"name": "Original", "nodes": [{"id": 1}], "links": []}
+        self.request("PUT", "/workflows/original.json", payload=original)
+        self.request("POST", "/workflows/original.json/activate", payload={})
+
+        status, _, body = self.request(
+            "POST",
+            "/workflows/current/save-as",
+            payload={"fileName": "renamed.json", "workflow": {"nodes": []}},
+        )
+
+        self.assertEqual(status, 422)
+        self.assertEqual(body["error"]["code"], "workflow_invalid")
+        current_path = self.root / "workflows" / "current" / "original.json"
+        self.assertTrue(current_path.is_file())
+        self.assertEqual(
+            json.loads(current_path.read_text(encoding="utf-8")),
+            {**original, "_infrax": {"sourceWorkflow": "list/original.json"}},
+        )
+
+    def test_save_current_as_rolls_back_archive_when_commit_fails(self):
+        original = {"name": "Original", "nodes": [{"id": 1}], "links": []}
+        renamed = {"name": "Renamed", "nodes": [{"id": 2}], "links": []}
+        self.request("PUT", "/workflows/original.json", payload=original)
+        self.request("POST", "/workflows/original.json/activate", payload={})
+
+        with mock.patch("studio_bridge.os.replace", side_effect=OSError("disk failure")):
+            status, _, body = self.request(
+                "POST",
+                "/workflows/current/save-as",
+                payload={"fileName": "renamed.json", "workflow": renamed},
+            )
+
+        self.assertEqual(status, 500)
+        self.assertEqual(body["error"]["code"], "workflow_save_as_failed", body)
+        current_dir = self.root / "workflows" / "current"
+        original_path = current_dir / "original.json"
+        self.assertTrue(original_path.is_file())
+        self.assertFalse((current_dir / "renamed.json").exists())
+        self.assertEqual(
+            json.loads(original_path.read_text(encoding="utf-8")),
+            {**original, "_infrax": {"sourceWorkflow": "list/original.json"}},
+        )
+        self.assertEqual(list((self.root / "workflows" / "temp").glob("original__*.json")), [])
+
+    def test_direct_list_save_strips_current_source_metadata(self):
+        workflow = {
+            "nodes": [], "links": [],
+            "_infrax": {"sourceWorkflow": "list/other.json", "note": "keep"},
+        }
+        status, _, _ = self.request("PUT", "/workflows/direct.json", payload=workflow)
+        self.assertEqual(status, 200)
+        stored = json.loads((self.root / "workflows" / "list" / "direct.json").read_text(encoding="utf-8"))
+        self.assertEqual(stored["_infrax"], {"note": "keep"})
+
+    def test_clear_without_archive_rolls_back_when_move_fails(self):
+        current_dir = self.root / "workflows" / "current"
+        original = {"nodes": [{"id": 1}], "links": []}
+        (current_dir / "draft.json").write_text(json.dumps(original), encoding="utf-8")
+        with mock.patch("studio_bridge.shutil.move", side_effect=OSError("move failed")):
+            status, _, body = self.request("POST", "/workflows/current/clear", payload={})
+        self.assertEqual(status, 500)
+        self.assertEqual(body["error"]["code"], "current_clear_failed")
+        self.assertEqual(json.loads((current_dir / "draft.json").read_text(encoding="utf-8")), original)
+
+    def test_restore_reports_temp_cleanup_failure_explicitly(self):
+        temp_dir = self.root / "workflows" / "temp"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        source = temp_dir / "draft.json"
+        source.write_text(json.dumps({"nodes": [], "links": []}), encoding="utf-8")
+        real_unlink = Path.unlink
+
+        def fail_source_unlink(path, *args, **kwargs):
+            if path == source:
+                raise OSError("busy")
+            return real_unlink(path, *args, **kwargs)
+
+        encoded = urllib.parse.quote("temp/draft.json", safe="")
+        with mock.patch("pathlib.Path.unlink", new=fail_source_unlink):
+            status, _, body = self.request("POST", f"/workflows/{encoded}/restore", payload={})
+        self.assertEqual(status, 200)
+        self.assertTrue(body["sourceCleanupPending"])
+        self.assertTrue(source.exists())
+        self.assertTrue((self.root / "workflows" / "current" / "draft.json").exists())
+
+    def test_clear_keeps_success_when_staging_cleanup_is_partial(self):
+        current_dir = self.root / "workflows" / "current"
+        (current_dir / "draft.json").write_text(json.dumps({"nodes": [], "links": []}), encoding="utf-8")
+        with mock.patch("studio_bridge.shutil.rmtree", side_effect=OSError("partial cleanup")):
+            status, _, body = self.request("POST", "/workflows/current/clear", payload={})
+        self.assertEqual(status, 200)
+        self.assertTrue(body["stagingCleanupPending"].startswith("temp/.current-clear-"))
+        self.assertEqual(list(current_dir.glob("*.json")), [])
+        self.assertTrue((self.root / "workflows" / body["stagingCleanupPending"]).exists())
+
+    def test_activate_without_archive_reports_staging_cleanup_pending(self):
+        first = {"nodes": [{"id": 1}], "links": []}
+        second = {"nodes": [{"id": 2}], "links": []}
+        self.request("PUT", "/workflows/first.json", payload=first)
+        self.request("PUT", "/workflows/second.json", payload=second)
+        self.request("POST", "/workflows/first.json/activate", payload={})
+        with mock.patch("studio_bridge.shutil.rmtree", side_effect=OSError("partial cleanup")):
+            status, _, body = self.request("POST", "/workflows/second.json/activate", payload={})
+        self.assertEqual(status, 200)
+        self.assertTrue(body["stagingCleanupPending"].startswith("temp/.current-replace-"))
+        current = json.loads((self.root / "workflows" / "current" / "second.json").read_text(encoding="utf-8"))
+        self.assertEqual(current["nodes"], second["nodes"])
+
+    def test_current_and_list_save_roll_back_when_second_replace_fails(self):
+        original = {"nodes": [{"id": 1}], "links": []}
+        changed = {"nodes": [{"id": 2}], "links": []}
+        self.request("PUT", "/workflows/item.json", payload=original)
+        self.request("POST", "/workflows/item.json/activate", payload={})
+        current_path = self.root / "workflows" / "current" / "item.json"
+        list_path = self.root / "workflows" / "list" / "item.json"
+        current_before = current_path.read_bytes()
+        list_before = list_path.read_bytes()
+        real_replace = os.replace
+        calls = 0
+
+        def fail_second_replace(source, destination):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise OSError("second commit failed")
+            return real_replace(source, destination)
+
+        encoded = urllib.parse.quote("current/item.json", safe="")
+        with mock.patch("studio_bridge.os.replace", side_effect=fail_second_replace):
+            status, _, body = self.request("PUT", f"/workflows/{encoded}", payload=changed)
+        self.assertEqual(status, 500)
+        self.assertEqual(body["error"]["code"], "workflow_save_failed")
+        self.assertEqual(current_path.read_bytes(), current_before)
+        self.assertEqual(list_path.read_bytes(), list_before)
 
     def test_run_returns_process_failure_without_hiding_output(self):
         workflow = {"nodes": [], "links": [], "fail": True}

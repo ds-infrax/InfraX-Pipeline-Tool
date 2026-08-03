@@ -2739,6 +2739,10 @@ textarea:hover {
   width: min(650px, 94vw);
 }
 
+.workflow-name-modal {
+  width: min(480px, 94vw);
+}
+
 .modal-head {
   display: flex;
   align-items: flex-start;

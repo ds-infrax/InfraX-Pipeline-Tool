@@ -205,6 +205,8 @@ let serverWorkflowItems = [];
 let tempWorkflowItems = [];
 let serverWorkflowListStatus = "idle";
 let currentWorkflowFileName = null;
+let currentWorkflowSourceFileName = null;
+let currentWorkflowResetFileName = null;
 let lastFolderSavedAt = null;
 let lastFolderSavedHash = null;
 let catalogReady = false;
@@ -339,7 +341,7 @@ function restoreLocalToolRootPreference() {
   try {
     localToolRootPreference = localStorage.getItem(localToolRootStorageKey()) || "";
     if (LOCAL_STUDIO_MODE && !localToolRootPreference) {
-      // Preserve an existing workflow-file association during the one-time
+      // Preserve an existing workflow-file link during the one-time
       // transition from the former user-selected root key. The local Studio
       // still sends `path: null`, so this value is comparison-only.
       localToolRootPreference = localStorage.getItem(
@@ -1484,7 +1486,7 @@ function renderServerWorkflowList() {
   serverWorkflowItems.forEach(item => {
     const fileName = item.fileName || item.name || String(item);
     const pkg = marketplacePackageForWorkflowFile(fileName);
-    const isCurrentAsset = currentWorkflowFileName === fileName || currentWorkflowFileName === `current/${fileName}`;
+    const isCurrentAsset = currentWorkflowSourceFileName === fileName;
     const savedAt = item.modifiedAt ? new Date(item.modifiedAt) : null;
     const savedLabel = savedAt && !Number.isNaN(savedAt.getTime())
       ? savedAt.toLocaleString("ko-KR", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })
@@ -4261,6 +4263,23 @@ async function saveCurrentWorkflowDraftFile(fileName, workflow) {
   return result;
 }
 
+async function saveCurrentWorkflowAsFile(fileName, workflow, options = {}) {
+  const response = await localToolFetch("workflows/current/save-as", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      fileName,
+      workflow,
+      ...(options.resetWorkflow ? { resetWorkflow: options.resetWorkflow } : {}),
+    }),
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok || !result.ok) {
+    throw new Error(result.error?.message || `HTTP ${response.status}`);
+  }
+  return result;
+}
+
 async function archiveDirtyCurrentWorkflowBeforeReplacement() {
   if (!isWorkflowDirty) return false;
   updateCurrentWorkflowStore();
@@ -4282,9 +4301,7 @@ async function newWorkflow() {
   const data = createBlankWorkflow();
   const fileName = currentWorkflowFileNameForName(name);
   try {
-    if (isWorkflowDirty) await archiveDirtyCurrentWorkflowBeforeReplacement();
-    else await clearCurrentWorkflowFolder({ archive: false });
-    await saveCurrentWorkflowDraftFile(fileName, data);
+    await saveCurrentWorkflowAsFile(fileName, data);
   } catch (error) {
     showToast(`새 워크플로우 파일 생성 실패: ${error.message || "로컬 파일 오류"}`);
     return;
@@ -4295,6 +4312,8 @@ async function newWorkflow() {
   currentWorkflowId = id;
   currentWorkflow = data;
   currentWorkflowFileName = fileName;
+  currentWorkflowSourceFileName = null;
+  currentWorkflowResetFileName = null;
   lastFolderSavedAt = null;
   lastFolderSavedHash = null;
   workflowSyncState = {};
@@ -4309,59 +4328,83 @@ async function newWorkflow() {
 }
 
 async function resetCurrentWorkflow() {
-  if (!confirm("현재 편집 중인 워크플로우를 빈 화면으로 초기화할까요?\n저장하지 않은 변경은 브라우저 초안에서 제거됩니다.")) {
+  const resetTarget = currentWorkflowSourceFileName || currentWorkflowResetFileName;
+  const resetDescription = resetTarget
+    ? `연결된 원본 workflows/list/${resetTarget} 내용으로 되돌릴까요?`
+    : "현재 이름을 유지하고 워크플로우 내용만 빈 상태로 초기화할까요?";
+  if (!confirm(`${resetDescription}\n저장하지 않은 변경은 제거됩니다.`)) {
     return;
   }
   try {
-    if (isWorkflowDirty) await archiveDirtyCurrentWorkflowBeforeReplacement();
-    else await clearCurrentWorkflowFolder({ archive: false });
+    const response = await localToolFetch("workflows/current/reset", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || !result.ok) throw new Error(result.error?.message || `HTTP ${response.status}`);
+    applyLoadedWorkflowResult(result, currentWorkflowFileName);
   } catch (error) {
-    showToast(`current 폴더 초기화 실패: ${error.message || "로컬 파일 오류"}`);
+    showToast(`워크플로우 초기화 실패: ${error.message || "로컬 파일 오류"}`);
     return;
   }
-  const name = "untitled";
-  const id = `${safeId(name)}_${Date.now()}`;
-  const data = createBlankWorkflow();
-  currentProjectId = "local_tool";
-  projectStore = [{ id: currentProjectId, name: "Local Tool" }];
-  workflowStore = [{ id, name, projectId: currentProjectId, data }];
-  currentWorkflowId = id;
-  currentWorkflow = data;
-  currentWorkflowFileName = null;
-  lastFolderSavedAt = null;
-  lastFolderSavedHash = null;
-  workflowSyncState = {};
-  workflowListCollapsed = true;
-  selectedNodeId = null;
-  selectedLinkId = null;
-  clearPendingLinkPort();
-  clearPendingLinkReconnect();
-  historyStack = [];
-  redoStack = [];
-  renderAll();
-  markWorkflowDirty();
-  persistLocalDraft({ immediate: true, silent: true });
-  void syncServerWorkflows();
-  fitView();
-  showToast("현재 워크플로우를 초기화했습니다. 저장을 누르면 workflows/list에 새 파일로 저장됩니다.");
+  showToast(resetTarget ? "연결된 원본 내용으로 되돌렸습니다." : "현재 이름을 유지하고 내용을 초기화했습니다.");
 }
 
-async function cloneWorkflow() {
-  if (!confirmUnsavedBeforeSwitch()) return;
+let cloneWorkflowSubmitting = false;
+
+function closeCloneWorkflowModal(options = {}) {
+  if (cloneWorkflowSubmitting && !options.force) return;
+  document.getElementById("cloneWorkflowModal")?.classList.add("hidden");
+  const error = document.getElementById("cloneWorkflowError");
+  if (error) error.textContent = "";
+  if (options.restoreFocus !== false) document.getElementById("cloneWorkflowBtn")?.focus();
+}
+
+function cloneWorkflow() {
   const current = workflowStore.find(workflow => workflow.id === currentWorkflowId);
   if (!current) return;
-  const name = prompt("복제할 워크플로우 이름", `${current.name}_copy`);
-  if (!name) return;
+  const modal = document.getElementById("cloneWorkflowModal");
+  const input = document.getElementById("cloneWorkflowName");
+  const error = document.getElementById("cloneWorkflowError");
+  if (!modal || !input) return;
+  input.value = `${current.name}_copy`;
+  if (error) error.textContent = "";
+  modal.classList.remove("hidden");
+  requestAnimationFrame(() => { input.focus(); input.select(); });
+}
+
+async function submitCloneWorkflow(event) {
+  event.preventDefault();
+  if (cloneWorkflowSubmitting) return;
+  const current = workflowStore.find(workflow => workflow.id === currentWorkflowId);
+  if (!current) return;
+  const input = document.getElementById("cloneWorkflowName");
+  const error = document.getElementById("cloneWorkflowError");
+  const name = String(input?.value || "").trim();
+  if (!name) {
+    if (error) error.textContent = "새 워크플로우 이름을 입력해 주세요.";
+    input?.focus();
+    return;
+  }
   const id = `${name.toLowerCase().replace(/[^a-z0-9_가-힣-]+/g, "_")}_${Date.now()}`;
+  updateCurrentWorkflowStore();
   const data = structuredClone(currentWorkflow);
   const fileName = currentWorkflowFileNameForName(name);
+  const resetWorkflow = currentWorkflowSourceFileName ? `list/${currentWorkflowSourceFileName}` : null;
+  const submitButton = event.currentTarget?.querySelector('button[type="submit"]');
+  cloneWorkflowSubmitting = true;
+  if (submitButton) submitButton.disabled = true;
   try {
-    if (isWorkflowDirty) await archiveDirtyCurrentWorkflowBeforeReplacement();
-    else await clearCurrentWorkflowFolder({ archive: false });
-    await saveCurrentWorkflowDraftFile(fileName, data);
-  } catch (error) {
-    showToast(`복제 파일 생성 실패: ${error.message || "로컬 파일 오류"}`);
+    await saveCurrentWorkflowAsFile(fileName, data, { resetWorkflow });
+  } catch (saveError) {
+    const message = `새이름 복제 실패: ${saveError.message || "로컬 파일 오류"}`;
+    if (error) error.textContent = message;
+    showToast(message);
     return;
+  } finally {
+    cloneWorkflowSubmitting = false;
+    if (submitButton) submitButton.disabled = false;
   }
   currentProjectId = "local_tool";
   projectStore = [{ id: currentProjectId, name: "Local Tool" }];
@@ -4369,6 +4412,8 @@ async function cloneWorkflow() {
   currentWorkflowId = id;
   currentWorkflow = data;
   currentWorkflowFileName = fileName;
+  currentWorkflowSourceFileName = null;
+  currentWorkflowResetFileName = resetWorkflow?.replace(/^list\//, "") || null;
   lastFolderSavedAt = null;
   lastFolderSavedHash = null;
   workflowSyncState = {};
@@ -4376,12 +4421,13 @@ async function cloneWorkflow() {
   redoStack = [];
   selectedNodeId = null;
   selectedLinkId = null;
+  closeCloneWorkflowModal({ force: true });
   renderAll();
   markWorkflowDirty();
   persistLocalDraft({ immediate: true, silent: true });
   void syncServerWorkflows();
   fitView();
-  showToast(`workflows/${fileName} 복제 작업본을 만들었습니다. 저장을 누르면 workflows/list에 확정됩니다.`);
+  showToast(`workflows/${fileName} 새이름 복제본을 만들었습니다. 저장을 누르면 workflows/list에 확정됩니다.`);
 }
 
 function setSaveState(status, message) {
@@ -4743,6 +4789,8 @@ async function performWorkflowSave(options = {}) {
       );
     }
     currentWorkflowFileName = result.fileName || fileName;
+    currentWorkflowSourceFileName = result.sourceWorkflow?.replace(/^list\//, "") || currentWorkflowSourceFileName;
+    currentWorkflowResetFileName = result.resetWorkflow?.replace(/^list\//, "") || null;
     const latestHash = hashSnapshot(exportWorkflowForDownload());
     if (latestHash === requestedHash) {
       clearWorkflowDirty(savedAt, null, requestedHash, currentWorkflowFileName);
@@ -4817,6 +4865,9 @@ async function syncServerWorkflows(options = {}) {
     serverWorkflowItems = result.workflows;
     tempWorkflowItems = Array.isArray(result.tempWorkflows) ? result.tempWorkflows : [];
     serverWorkflowListStatus = "ready";
+    if (options.loadCurrent && result.currentWorkflow?.workflow) {
+      applyLoadedWorkflowResult(result.currentWorkflow, result.currentWorkflow.fileName);
+    }
     renderWorkflowList();
     renderServerWorkflowList();
     renderStudioContext();
@@ -4852,6 +4903,8 @@ function applyLoadedWorkflowResult(result, fallbackFileName) {
   currentWorkflowId = id;
   currentWorkflow = snapshot;
   currentWorkflowFileName = loadedFileName;
+  currentWorkflowSourceFileName = result.sourceWorkflow?.replace(/^list\//, "") || null;
+  currentWorkflowResetFileName = result.resetWorkflow?.replace(/^list\//, "") || null;
   projectStore = [{ id: "local_tool", name: "Local Tool" }];
   currentProjectId = "local_tool";
   workflowStore = [{ id, name, projectId: currentProjectId, data: snapshot }];
@@ -6406,6 +6459,18 @@ document.getElementById("addNodeBtn").addEventListener("click", () => {
 });
 document.getElementById("newWorkflowBtn").addEventListener("click", newWorkflow);
 document.getElementById("cloneWorkflowBtn").addEventListener("click", cloneWorkflow);
+document.getElementById("cloneWorkflowForm").addEventListener("submit", submitCloneWorkflow);
+document.getElementById("closeCloneWorkflowBtn").addEventListener("click", closeCloneWorkflowModal);
+document.getElementById("cancelCloneWorkflowBtn").addEventListener("click", closeCloneWorkflowModal);
+document.getElementById("cloneWorkflowModal").addEventListener("click", event => {
+  if (event.target === event.currentTarget) closeCloneWorkflowModal();
+});
+document.addEventListener("keydown", event => {
+  if (event.key === "Escape" && !document.getElementById("cloneWorkflowModal")?.classList.contains("hidden")) {
+    event.preventDefault();
+    closeCloneWorkflowModal();
+  }
+});
 document.getElementById("toggleWorkflowListBtn").addEventListener("click", toggleWorkflowListMode);
 document.getElementById("tempWorkflowToggleBtn")?.addEventListener("click", event => {
   const button = event.currentTarget;
@@ -6811,7 +6876,7 @@ async function initializeApplication() {
     if (!contextReady) return;
     await Promise.allSettled([
       refreshLocalExplorer({ silent: true }),
-      syncServerWorkflows(),
+      syncServerWorkflows({ loadCurrent: true }),
       syncInstalledLocalPackages(),
     ]);
     return;

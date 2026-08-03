@@ -33,19 +33,19 @@
         <button class="icon-button" id="historyBtn" type="button" title="변경 기록" aria-label="변경 기록 열기">
           <span class="material-symbols-outlined">history</span>
         </button>
-        <button class="btn ghost" id="resetWorkflowBtn" type="button" title="현재 편집 화면을 빈 워크플로우로 초기화">
+        <button class="btn ghost" id="resetWorkflowBtn" type="button" title="연결 원본이 있으면 workflows/list 원본으로 되돌리고, 새 워크플로우는 빈 상태로 초기화">
           <span class="material-symbols-outlined">restart_alt</span>
           초기화
         </button>
-        <button class="btn ghost" id="cloneWorkflowBtn" type="button" title="현재 워크플로우를 복제해 새 작업본으로 시작">
+        <button class="btn ghost" id="cloneWorkflowBtn" type="button" title="현재 워크플로우를 새 이름의 작업본으로 복제">
           <span class="material-symbols-outlined">content_copy</span>
-          복제
+          새이름 복제
         </button>
         <button class="btn ghost" id="saveWorkflowBtn" type="button" title="현재 워크플로우를 workflows/list 폴더에 저장">
           <span class="material-symbols-outlined">save</span>
           저장
         </button>
-        <button class="btn ghost" id="runWorkflowBtn" type="button" title="저장한 워크플로우를 main.py로 실행">
+        <button class="btn ghost" id="runWorkflowBtn" type="button" title="필요하면 먼저 저장한 뒤 현재 워크플로우를 main.py로 실행">
           <span class="material-symbols-outlined">play_arrow</span>
           실행
         </button>
@@ -584,6 +584,33 @@
       <div class="marketplace-list marketplace-grid" id="marketplaceList"></div>
     </main>
   </section>
+
+  <div class="modal-backdrop hidden" id="cloneWorkflowModal" role="dialog" aria-modal="true" aria-labelledby="cloneWorkflowTitle">
+    <form class="modal workflow-name-modal" id="cloneWorkflowForm" novalidate>
+      <div class="modal-head">
+        <div class="modal-title">
+          <span class="eyebrow">SAVE WORKFLOW AS</span>
+          <b id="cloneWorkflowTitle">현재 워크플로우 새이름 복제</b>
+          <span>현재 화면의 워크플로우를 그대로 새 이름의 작업본으로 복제합니다.</span>
+        </div>
+        <button class="icon-button" type="button" id="closeCloneWorkflowBtn" aria-label="새이름 복제 창 닫기">
+          <span class="material-symbols-outlined">close</span>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div class="field">
+          <label for="cloneWorkflowName">복제할 새 이름</label>
+          <input id="cloneWorkflowName" name="name" required maxlength="120" autocomplete="off" />
+          <small>현재 워크플로우를 workflows/current에 입력한 이름으로 복제합니다. 저장 버튼을 눌러야 workflows/list에 확정됩니다.</small>
+        </div>
+        <p class="form-error" id="cloneWorkflowError" role="alert" aria-live="polite"></p>
+      </div>
+      <div class="modal-foot">
+        <button class="btn ghost" type="button" id="cancelCloneWorkflowBtn">취소</button>
+        <button class="btn primary" type="submit"><span class="material-symbols-outlined">save_as</span>새이름 복제</button>
+      </div>
+    </form>
+  </div>
 
   <div class="modal-backdrop hidden" id="workflowRegisterModal" role="dialog" aria-modal="true" aria-labelledby="workflowRegisterTitle">
     <form class="modal workflow-register-modal" id="workflowRegisterForm" novalidate>
