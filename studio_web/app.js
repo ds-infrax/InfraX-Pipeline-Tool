@@ -1842,12 +1842,6 @@ function renderNodePalette() {
           repoDetails.open = true;
           const pkg = marketplacePackageForNodeScripts(repoGroup.scripts);
           const localPackageId = customNodePackageId(repoGroup.tree.base, repoGroup.tree.repo);
-          const action = !serverWritesEnabled()
-            ? ""
-            : pkg
-              ? marketplaceActionButton(pkg.canManage ? "수정" : "등록됨", `openNodeTypeMarketplaceAction(${inlineJson(repoGroup.scripts[0]?.type || "")})`, pkg.canManage ? "" : "readonly")
-              : marketplaceActionButton("등록", `openNodeTypeMarketplaceAction(${inlineJson(repoGroup.scripts[0]?.type || "")})`, "new");
-
           const packageAction = !serverWritesEnabled()
             ? ""
             : pkg
@@ -1858,7 +1852,7 @@ function renderNodePalette() {
               <span class="material-symbols-outlined" aria-hidden="true">folder_open</span>
               <b>${escapeHtml(repoGroup.tree.repoLabel)}</b>
               <small>${repoGroup.scripts.length} nodes</small>
-              ${action}
+              ${packageAction}
             </summary>
           `;
 
@@ -2831,7 +2825,12 @@ async function registerMarketplacePackage(event) {
   const editingPackage = editingModulePackageId
     ? registeredMarketplacePackages.find(item => item.id === editingModulePackageId && !item.workflow)
     : null;
-  const existing = sourceType === "local-package"
+  const localRepoBackedGit = sourceType === "git"
+    && selectedLocalPackage
+    && selectedLocalPackage.git?.enabled
+    && selectedLocalPackage.git.remoteUrl
+    && gitSourcePath === selectedLocalPackage.git.remoteUrl;
+  const existing = sourceType === "local-package" || localRepoBackedGit
     ? registeredMarketplacePackages.find(item => item.id === localPackageId && !item.workflow)
     : editingPackage;
   let message = "";
@@ -2853,6 +2852,11 @@ async function registerMarketplacePackage(event) {
     message = "Git 소스경로를 입력해 주세요.";
   } else if (sourceType === "git" && !isValidGitSourcePath(gitSourcePath)) {
     message = "HTTPS, SSH 또는 git@ 형식의 Git 주소를 입력해 주세요. URL에 계정 정보나 query를 넣을 수 없습니다.";
+  } else if (
+    localRepoBackedGit
+    && !nodeTypes.every(nodeType => selectedLocalPackage.nodeTypes.includes(nodeType))
+  ) {
+    message = "선택한 노드 레포에서 확인되지 않은 노드 타입은 등록할 수 없습니다.";
   } else if (sourceType === "zip" && !zipFile && existing?.source?.type !== "zip") {
     message = "등록할 ZIP 파일을 선택해 주세요.";
   } else if (sourceType === "zip" && zipFile && !/\.zip$/i.test(zipFile.name)) {
@@ -2871,7 +2875,7 @@ async function registerMarketplacePackage(event) {
     : sourceType === "zip"
       ? { type: "zip", fileName: zipFile?.name || existing.source.fileName }
       : null;
-  const packageId = sourceType === "local-package"
+  const packageId = sourceType === "local-package" || localRepoBackedGit
     ? selectedLocalPackage.id
     : existing?.id || serverWorkflowId(`module_${Date.now()}_${safeId(name)}`);
   const payload = {

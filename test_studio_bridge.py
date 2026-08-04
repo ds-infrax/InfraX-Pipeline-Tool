@@ -1222,7 +1222,7 @@ class StudioBridgeTest(unittest.TestCase):
                 / "nodes.py"
             ).is_file()
         )
-        self.assertFalse(
+        self.assertTrue(
             (
                 self.root
                 / "custom_nodes"

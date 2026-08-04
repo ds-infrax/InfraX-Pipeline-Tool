@@ -61,6 +61,15 @@ function normalizeLocalPublishablePackage(pkg, source) {
     installPath: typeof pkg.installPath === "string" ? pkg.installPath.trim() : "",
     fileCount: Number.isFinite(Number(pkg.fileCount)) ? Number(pkg.fileCount) : 0,
     size: Number.isFinite(Number(pkg.size)) ? Number(pkg.size) : 0,
+    git: pkg.git && typeof pkg.git === "object"
+      ? {
+          enabled: Boolean(pkg.git.enabled),
+          remoteUrl: typeof pkg.git.remoteUrl === "string" ? pkg.git.remoteUrl.trim() : "",
+          revision: typeof pkg.git.revision === "string" ? pkg.git.revision.trim() : "",
+          branch: typeof pkg.git.branch === "string" ? pkg.git.branch.trim() : "",
+          dirty: Boolean(pkg.git.dirty),
+        }
+      : { enabled: false },
     source,
   };
 }
@@ -138,6 +147,14 @@ function applyLocalPublishablePackageSelection() {
   form.elements.kind.value = pkg.kind;
   form.elements.nodeTypes.value = pkg.nodeTypes.join(", ");
   if (pkg.author && !authState.user) form.elements.author.value = pkg.author;
+  const gitSource = form.querySelector('input[name="sourceType"][value="git"]');
+  const localSource = form.querySelector('input[name="sourceType"][value="local-package"]');
+  if (pkg.git?.enabled && pkg.git.remoteUrl && gitSource) {
+    gitSource.checked = true;
+    if (form.elements.gitSourcePath) form.elements.gitSourcePath.value = pkg.git.remoteUrl;
+  } else if (localSource) {
+    localSource.checked = true;
+  }
   renderMarketplaceNodeSelection();
 }
 
@@ -146,8 +163,6 @@ async function prepareDefaultLocalPackageRegistration() {
   const packages = await syncLocalPublishablePackages({ notify: false });
   const form = document.getElementById("marketplaceRegisterForm");
   if (!form || !packages.length) return false;
-  const localSource = form.querySelector('input[name="sourceType"][value="local-package"]');
-  if (localSource) localSource.checked = true;
   const select = form.elements.localPackageId;
   if (select && !select.value) {
     select.value = marketplaceFocusPackageId && packages.some(pkg => pkg.id === marketplaceFocusPackageId)

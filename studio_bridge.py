@@ -1214,9 +1214,63 @@ class BridgeState:
                     "nodeTypes": sorted(set(node_types), key=str.casefold),
                     "fileCount": len(files),
                     "size": total_size,
+                    "git": self._local_git_repository_info(candidate),
                 }
             )
         return sorted(packages, key=lambda package: package["id"].casefold())
+
+    def _run_package_git(
+        self,
+        repo_path: Path,
+        args: list[str],
+        *,
+        timeout: float = 30.0,
+    ) -> dict[str, Any]:
+        command = ["git", "-c", f"safe.directory={repo_path}", "-C", str(repo_path), *args]
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=self.root,
+                text=True,
+                capture_output=True,
+                timeout=timeout,
+                shell=False,
+            )
+        except FileNotFoundError:
+            return {
+                "command": command,
+                "returnCode": 127,
+                "stdout": "",
+                "stderr": "git executable not found",
+            }
+        except subprocess.TimeoutExpired as error:
+            return {
+                "command": command,
+                "returnCode": 124,
+                "stdout": _limited_output(error.stdout),
+                "stderr": _limited_output(error.stderr),
+            }
+        return {
+            "command": command,
+            "returnCode": completed.returncode,
+            "stdout": _limited_output(completed.stdout),
+            "stderr": _limited_output(completed.stderr),
+        }
+
+    def _local_git_repository_info(self, repo_path: Path) -> dict[str, Any]:
+        if not (repo_path / ".git").exists():
+            return {"enabled": False}
+        remote = self._run_package_git(repo_path, ["remote", "get-url", "origin"], timeout=10)
+        revision = self._run_package_git(repo_path, ["rev-parse", "HEAD"], timeout=10)
+        branch = self._run_package_git(repo_path, ["rev-parse", "--abbrev-ref", "HEAD"], timeout=10)
+        status = self._run_package_git(repo_path, ["status", "--short"], timeout=10)
+        return {
+            "enabled": True,
+            "remoteUrl": remote["stdout"].strip() if remote["returnCode"] == 0 else "",
+            "revision": revision["stdout"].strip() if revision["returnCode"] == 0 else "",
+            "branch": branch["stdout"].strip() if branch["returnCode"] == 0 else "",
+            "dirty": bool(status["stdout"].strip()) if status["returnCode"] == 0 else False,
+        }
 
     def local_custom_node_package(self, package_id: str) -> dict[str, Any]:
         safe_id = _validate_package_id(package_id)
@@ -1754,7 +1808,105 @@ class BridgeState:
                     "catalog_backup_failed",
                     "패키지 설치 전 기존 catalog.json을 백업하지 못했습니다.",
                 ) from error
+
+            def finalize_installed_package(
+                installed_root: Path,
+                *,
+                revision: str,
+                installed_at: str,
+            ) -> tuple[dict[str, Any], dict[str, Any]]:
+                package = {
+                    **metadata,
+                    "sha256": hashlib.sha256(
+                        f"{source_path}\n{revision}".encode("utf-8")
+                    ).hexdigest(),
+                    "installPath": target.relative_to(self.asset_root).as_posix(),
+                    "installedAt": installed_at,
+                }
+                (installed_root / PACKAGE_MANIFEST_FILENAME).write_text(
+                    json.dumps(
+                        {
+                            "schema": "infrax.package.v1",
+                            **package,
+                            "source": {
+                                "type": "git",
+                                "path": source_path,
+                                "url": source_path,
+                            },
+                            "revision": revision,
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                refreshed = self.refresh_catalog()
+                discovered_node_types = {
+                    str(node.get("key"))
+                    for node in refreshed["catalog"].get("nodes", [])
+                    if isinstance(node, dict) and node.get("key")
+                }
+                missing_node_types = sorted(
+                    set(package["nodeTypes"]) - discovered_node_types
+                )
+                if missing_node_types:
+                    raise BridgeError(
+                        HTTPStatus.UNPROCESSABLE_ENTITY,
+                        "package_catalog_mismatch",
+                        "설치한 Git 노드 패키지의 선언 노드를 catalog.py에서 찾지 못했습니다.",
+                        details={"missingNodeTypes": missing_node_types[:100]},
+                    )
+                catalog = self._annotate_catalog_packages(
+                    refreshed["catalog"],
+                    extra_package=package,
+                )
+                packages = [
+                    current
+                    for current in self._read_package_registry_unlocked()
+                    if current["id"] != package["id"]
+                ]
+                packages.append(package)
+                self._write_package_registry_unlocked(packages)
+                return package, catalog
+
             try:
+                if target.exists() and (target / ".git").exists():
+                    origin = self._run_package_git(
+                        target,
+                        ["remote", "get-url", "origin"],
+                        timeout=10,
+                    )
+                    if origin["returnCode"] == 0 and origin["stdout"].strip() == source_path:
+                        pull = self._run_package_git(
+                            target,
+                            ["pull", "--ff-only"],
+                            timeout=120,
+                        )
+                        if pull["returnCode"] != 0:
+                            raise BridgeError(
+                                HTTPStatus.CONFLICT,
+                                "git_package_pull_failed",
+                                "기존 Git 노드 패키지를 pull 하지 못했습니다.",
+                                details=pull,
+                            )
+                        commit = self._run_package_git(
+                            target,
+                            ["rev-parse", "HEAD"],
+                            timeout=10,
+                        )
+                        revision = commit["stdout"].strip() if commit["returnCode"] == 0 else ""
+                        installed_at = datetime.now(timezone.utc).isoformat()
+                        package, catalog = finalize_installed_package(
+                            target,
+                            revision=revision,
+                            installed_at=installed_at,
+                        )
+                        return {
+                            "ok": True,
+                            "package": package,
+                            "catalog": catalog,
+                        }
                 clone = subprocess.run(
                     ["git", "clone", "--depth", "1", source_path, str(staging)],
                     cwd=self.root,
@@ -1787,62 +1939,17 @@ class BridgeState:
                     shell=False,
                 )
                 revision = commit.stdout.strip() if commit.returncode == 0 else ""
-                self._remove_local_path(staging / ".git")
                 installed_at = datetime.now(timezone.utc).isoformat()
-                package = {
-                    **metadata,
-                    "sha256": hashlib.sha256(
-                        f"{source_path}\n{revision}".encode("utf-8")
-                    ).hexdigest(),
-                    "installPath": target.relative_to(self.asset_root).as_posix(),
-                    "installedAt": installed_at,
-                }
-                (staging / PACKAGE_MANIFEST_FILENAME).write_text(
-                    json.dumps(
-                        {
-                            "schema": "infrax.package.v1",
-                            **package,
-                            "source": {"type": "git", "path": source_path},
-                            "revision": revision,
-                        },
-                        ensure_ascii=False,
-                        indent=2,
-                    )
-                    + "\n",
-                    encoding="utf-8",
-                )
                 if target.exists():
                     os.replace(target, backup)
                     target_was_moved = True
                 os.replace(staging, target)
                 new_target_installed = True
-                refreshed = self.refresh_catalog()
-                discovered_node_types = {
-                    str(node.get("key"))
-                    for node in refreshed["catalog"].get("nodes", [])
-                    if isinstance(node, dict) and node.get("key")
-                }
-                missing_node_types = sorted(
-                    set(package["nodeTypes"]) - discovered_node_types
+                package, catalog = finalize_installed_package(
+                    target,
+                    revision=revision,
+                    installed_at=installed_at,
                 )
-                if missing_node_types:
-                    raise BridgeError(
-                        HTTPStatus.UNPROCESSABLE_ENTITY,
-                        "package_catalog_mismatch",
-                        "설치한 Git 노드 패키지의 선언 노드를 catalog.py에서 찾지 못했습니다.",
-                        details={"missingNodeTypes": missing_node_types[:100]},
-                    )
-                catalog = self._annotate_catalog_packages(
-                    refreshed["catalog"],
-                    extra_package=package,
-                )
-                packages = [
-                    current
-                    for current in self._read_package_registry_unlocked()
-                    if current["id"] != package["id"]
-                ]
-                packages.append(package)
-                self._write_package_registry_unlocked(packages)
             except BridgeError as error:
                 try:
                     self._rollback_package_install(

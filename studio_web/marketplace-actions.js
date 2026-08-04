@@ -407,8 +407,14 @@ async function openNodePackageMarketplaceAction(packageId) {
   resetMarketplaceRegisterForm();
   const form = document.getElementById("marketplaceRegisterForm");
   if (!form) return;
+  const gitSource = form.querySelector('input[name="sourceType"][value="git"]');
   const localSource = form.querySelector('input[name="sourceType"][value="local-package"]');
-  if (localSource) localSource.checked = true;
+  if (localPackage.git?.enabled && localPackage.git.remoteUrl && gitSource) {
+    gitSource.checked = true;
+    if (form.elements.gitSourcePath) form.elements.gitSourcePath.value = localPackage.git.remoteUrl;
+  } else if (localSource) {
+    localSource.checked = true;
+  }
   if (form.elements.localPackageId) form.elements.localPackageId.value = localPackage.id;
   form.elements.name.value = existing ? `${localPackage.name}_copy` : localPackage.name;
   form.elements.version.value = localPackage.version && isSemanticVersion(localPackage.version)
