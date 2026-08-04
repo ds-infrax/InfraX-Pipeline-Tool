@@ -170,6 +170,17 @@ class StudioBridgeTest(unittest.TestCase):
             'customElements.define("x-test", class extends HTMLElement {});',
             encoding="utf-8",
         )
+        for filename in (
+            "marketplace-actions.js",
+            "marketplace-navigation.js",
+            "marketplace-registration.js",
+            "marketplace-sidebar.js",
+            "marketplace-view.js",
+        ):
+            (self.studio_root / filename).write_text(
+                f'window.{filename.replace("-", "_").replace(".", "_")} = true;',
+                encoding="utf-8",
+            )
         (self.studio_root / "assets" / "mark.svg").write_text(
             '<svg xmlns="http://www.w3.org/2000/svg"></svg>',
             encoding="utf-8",
@@ -361,6 +372,11 @@ class StudioBridgeTest(unittest.TestCase):
         self.assertEqual(headers["Content-Type"], "text/javascript; charset=utf-8")
         self.assertGreater(int(headers["Content-Length"]), 0)
 
+        status, headers, body = self.raw_request("GET", "/marketplace-view.js")
+        self.assertEqual(status, 200)
+        self.assertEqual(headers["Content-Type"], "text/javascript; charset=utf-8")
+        self.assertIn(b"marketplace_view_js", body)
+
         status, headers, body = self.raw_request("GET", "/assets/mark.svg")
         self.assertEqual(status, 200)
         self.assertEqual(headers["Content-Type"], "image/svg+xml")
@@ -382,6 +398,11 @@ class StudioBridgeTest(unittest.TestCase):
             "app.js",
             "styles.css",
             "ui-components.js",
+            "marketplace-actions.js",
+            "marketplace-navigation.js",
+            "marketplace-registration.js",
+            "marketplace-sidebar.js",
+            "marketplace-view.js",
         ):
             (invalid_root / filename).write_text(
                 (self.studio_root / filename).read_text(encoding="utf-8"),

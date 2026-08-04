@@ -129,6 +129,11 @@ STUDIO_STATIC_FILES = frozenset(
         "app.js",
         "styles.css",
         "ui-components.js",
+        "marketplace-actions.js",
+        "marketplace-navigation.js",
+        "marketplace-registration.js",
+        "marketplace-sidebar.js",
+        "marketplace-view.js",
     }
 )
 STUDIO_REQUIRED_ASSET_FILES = frozenset(
