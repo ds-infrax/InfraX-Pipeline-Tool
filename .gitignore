@@ -1,4 +1,5 @@
 __pycache__/
+**/__pycache__/
 *.py[cod]
 
 .venv/
@@ -18,18 +19,44 @@ env/
 catalog.json
 *.egg-info/
 
-/assets-repo/
+# Local package registry / downloaded runtime artifacts
+package-registry.json
+python-3.10.0-embed-amd64.zip
 
-/custom_nodes/*
-!/custom_nodes/sample/
-!/custom_nodes/sample/**
-/custom_nodes/sample/**/__pycache__/
-/custom_nodes/sample/**/*.py[cod]
+# assets-repo is the local asset workspace bundled with the Pipeline Tool.
+# Track only the folder skeleton and explicit samples here. Downloaded or
+# in-progress marketplace assets stay local and are managed by their own source
+# repositories when needed.
+assets-repo/.git/
+assets-repo/**/.git/
+assets-repo/**/__pycache__/
+assets-repo/**/*.py[cod]
+assets-repo/**/catalog.json
 
-/workflows/*
-!/workflows/list/
-!/workflows/list/**
-/workflows/current/
-/workflows/temp/
+assets-repo/custom_nodes/develop/*
+!assets-repo/custom_nodes/develop/.gitkeep
+!assets-repo/custom_nodes/develop/sample/
+!assets-repo/custom_nodes/develop/sample/__init__.py
+!assets-repo/custom_nodes/develop/sample/nodes.py
 
-/models/
+assets-repo/custom_nodes/market/*
+!assets-repo/custom_nodes/market/.gitkeep
+
+assets-repo/models/develop/*
+!assets-repo/models/develop/.gitkeep
+
+assets-repo/models/market/*
+!assets-repo/models/market/.gitkeep
+
+assets-repo/workflows/current/*
+!assets-repo/workflows/current/.gitkeep
+
+assets-repo/workflows/temp/*
+!assets-repo/workflows/temp/.gitkeep
+
+assets-repo/workflows/list/*
+
+assets-repo/workflows/sample/*
+!assets-repo/workflows/sample/.gitkeep
+!assets-repo/workflows/sample/sample_a+b=c.json
+!assets-repo/workflows/sample/sample_custom.json

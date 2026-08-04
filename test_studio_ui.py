@@ -1,10 +1,11 @@
-import re
+﻿import re
 import unittest
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent
 APP_SOURCE = (ROOT / "studio_web" / "app.js").read_text(encoding="utf-8")
+MARKETPLACE_NAVIGATION_SOURCE = (ROOT / "studio_web" / "marketplace-navigation.js").read_text(encoding="utf-8")
 STYLE_SOURCE = (ROOT / "studio_web" / "styles.css").read_text(encoding="utf-8")
 HTML_SOURCE = (ROOT / "studio_web" / "index.html").read_text(encoding="utf-8")
 ORCHID_ASSET = ROOT / "studio_web" / "assets" / "ink-orchid-watermark.jpg"
@@ -241,15 +242,24 @@ class StudioSidebarNavigationTest(unittest.TestCase):
 
     def test_marketplace_entry_is_preserved(self):
         self.assertIn('id="marketplaceBtn"', HTML_SOURCE)
-        self.assertIn('title="운영 Marketplace 열기"', HTML_SOURCE)
+        self.assertIn('title="등록된 Marketplace 목록 보기"', HTML_SOURCE)
+        self.assertIn('id="openMarketplaceShortcutBtn"', HTML_SOURCE)
+        self.assertIn('title="Marketplace 바로가기"', HTML_SOURCE)
+        self.assertIn('<script src="./marketplace-navigation.js"></script>', HTML_SOURCE)
         self.assertIn("return new URL(MARKETPLACE_SITE_URL);", APP_SOURCE)
         self.assertIn(
-            'document.getElementById("marketplaceBtn").addEventListener("click", openHostedMarketplace);',
-            APP_SOURCE,
+            'marketplaceMenuButton?.addEventListener("click", () => {\n'
+            '    openSidebarSection("marketplaceSection");\n'
+            '  });',
+            MARKETPLACE_NAVIGATION_SOURCE,
         )
-        self.assertIn('siteUrl.searchParams.set("returnTo", globalThis.location.href);', APP_SOURCE)
-        self.assertIn('window.open(siteUrl.toString(), "infrax_marketplace")', APP_SOURCE)
-
+        self.assertIn(
+            'hostedMarketplaceShortcut?.addEventListener("click", () => {\n'
+            '    openMarketplaceSite();\n'
+            '  });',
+            MARKETPLACE_NAVIGATION_SOURCE,
+        )
+        self.assertIn('window.open(siteUrl.toString(), "_blank", "noopener,noreferrer")', APP_SOURCE)
     def test_workflow_marketplace_button_shows_account_status(self):
         self.assertIn('class="button-label">Marketplace 연결 정보</span>', HTML_SOURCE)
         self.assertIn('workflowMarketplaceButton.classList.toggle("is-progress", isCheckingAccount)', APP_SOURCE)
@@ -318,3 +328,4 @@ class StudioSidebarNavigationTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

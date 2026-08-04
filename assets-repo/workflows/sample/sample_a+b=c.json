@@ -1,0 +1,204 @@
+{
+  "schema": "workflow.graph.v1",
+  "last_node_id": 6,
+  "last_link_id": 3,
+  "nodes": [
+    {
+      "id": 1,
+      "name": "Number Input",
+      "type": "basic.NumberInput",
+      "script_id": "catalog_basic.numberinput",
+      "node_ref": {
+        "package_id": "local-dev",
+        "definition_id": "basic.NumberInput",
+        "version": "workflow.catalog.v1",
+        "digest": null
+      },
+      "implementation_ref": {
+        "package_id": "local-dev",
+        "definition_id": "basic.NumberInput",
+        "version": "workflow.catalog.v1",
+        "digest": null
+      },
+      "pos": [
+        45,
+        170
+      ],
+      "size": [
+        270,
+        82
+      ],
+      "init_values": {
+        "value": 8
+      },
+      "widgets_values": [
+        8
+      ],
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "float",
+          "links": [
+            1
+          ]
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "name": "Number Input",
+      "type": "basic.NumberInput",
+      "script_id": "catalog_basic.numberinput",
+      "node_ref": {
+        "package_id": "local-dev",
+        "definition_id": "basic.NumberInput",
+        "version": "workflow.catalog.v1",
+        "digest": null
+      },
+      "implementation_ref": {
+        "package_id": "local-dev",
+        "definition_id": "basic.NumberInput",
+        "version": "workflow.catalog.v1",
+        "digest": null
+      },
+      "pos": [
+        40,
+        330
+      ],
+      "size": [
+        270,
+        82
+      ],
+      "init_values": {
+        "value": 4
+      },
+      "widgets_values": [
+        4
+      ],
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "float",
+          "links": [
+            2
+          ]
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "name": "Add",
+      "type": "basic.Add",
+      "script_id": "catalog_basic.add",
+      "node_ref": {
+        "package_id": "local-dev",
+        "definition_id": "basic.Add",
+        "version": "workflow.catalog.v1",
+        "digest": null
+      },
+      "implementation_ref": {
+        "package_id": "local-dev",
+        "definition_id": "basic.Add",
+        "version": "workflow.catalog.v1",
+        "digest": null
+      },
+      "pos": [
+        360,
+        260
+      ],
+      "size": [
+        270,
+        82
+      ],
+      "init_values": {},
+      "widgets_values": [],
+      "inputs": [
+        {
+          "name": "a",
+          "type": "float",
+          "link": 1,
+          "value": 3
+        },
+        {
+          "name": "b",
+          "type": "float",
+          "link": 2
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "float",
+          "links": [
+            3
+          ]
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "name": "Output Value",
+      "type": "basic.OutputValue",
+      "script_id": "catalog_basic.outputvalue",
+      "node_ref": {
+        "package_id": "local-dev",
+        "definition_id": "basic.OutputValue",
+        "version": "workflow.catalog.v1",
+        "digest": null
+      },
+      "implementation_ref": {
+        "package_id": "local-dev",
+        "definition_id": "basic.OutputValue",
+        "version": "workflow.catalog.v1",
+        "digest": null
+      },
+      "pos": [
+        680,
+        260
+      ],
+      "size": [
+        180,
+        40
+      ],
+      "init_values": {},
+      "widgets_values": [],
+      "inputs": [
+        {
+          "name": "source",
+          "type": "*",
+          "link": 3
+        }
+      ],
+      "outputs": []
+    }
+  ],
+  "links": [
+    [
+      1,
+      1,
+      0,
+      3,
+      0,
+      "float"
+    ],
+    [
+      2,
+      2,
+      0,
+      3,
+      1,
+      "float"
+    ],
+    [
+      3,
+      3,
+      0,
+      4,
+      0,
+      "float"
+    ]
+  ],
+  "version": 0.1
+}
