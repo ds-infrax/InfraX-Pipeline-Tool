@@ -219,10 +219,11 @@ h3 {
 .topbar-brand {
   display: flex;
   align-items: center;
-  gap: 13px;
+  gap: 11px;
   height: 100%;
-  padding: 0 22px;
+  padding: 0 16px;
   background: var(--surface-low);
+  color: var(--inverse);
 }
 
 .brand-mark {
@@ -239,6 +240,42 @@ h3 {
   box-shadow: 0 12px 24px rgba(34, 52, 70, 0.15);
 }
 
+.brand-logo-shell {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  min-width: 42px;
+  height: 40px;
+  overflow: hidden;
+  border-radius: 12px;
+  background: var(--inverse);
+  box-shadow: 0 12px 24px rgba(34, 52, 70, 0.15);
+}
+
+.brand-logo {
+  display: block;
+  width: 30px;
+  height: auto;
+  object-fit: contain;
+}
+
+.marketplace-logo-shell {
+  width: 168px;
+  min-width: 168px;
+  height: 48px;
+  padding: 0 12px;
+  background: rgba(14, 29, 43, 0.34);
+}
+
+.marketplace-logo-shell .brand-logo {
+  width: 144px;
+}
+
+.marketplace-logo {
+  max-height: 34px;
+}
+
 .brand-mark.inverse {
   background: var(--primary-container);
   color: var(--on-primary);
@@ -252,12 +289,13 @@ h3 {
 }
 
 .topbar-brand strong {
+  color: var(--inverse);
   font-size: 15px;
   font-weight: 850;
   letter-spacing: -0.04em;
 }
 
-.topbar-brand span:not(.brand-mark) {
+.topbar-brand span:not(.brand-mark):not(.brand-logo-shell) {
   overflow: hidden;
   color: var(--muted);
   font-size: 10px;
@@ -3213,7 +3251,7 @@ textarea:hover {
     grid-template-columns: calc(var(--rail-width) + var(--sidebar-width)) minmax(180px, 1fr) auto;
   }
 
-  .topbar-brand span:not(.brand-mark),
+  .topbar-brand span:not(.brand-mark):not(.brand-logo-shell),
   .save-state,
   .topbar-actions .btn span:not(.material-symbols-outlined) {
     display: none;
