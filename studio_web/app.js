@@ -3847,6 +3847,10 @@ function setMarketplaceTab(tab) {
 }
 
 function openMarketplaceView(options = {}) {
+  if (LOCAL_STUDIO_MODE) {
+    openMarketplaceSite();
+    return;
+  }
   if (options.fullList) marketplaceListExpanded = true;
   renderStudioContext();
   renderMarketplace();
@@ -7246,7 +7250,7 @@ function exportWorkflowForDownload() {
 
 document.getElementById("undoBtn").addEventListener("click", undo);
 document.getElementById("redoBtn").addEventListener("click", redo);
-document.getElementById("marketplaceBtn").addEventListener("click", () => openSidebarSection("marketplaceSection"));
+document.getElementById("marketplaceBtn").addEventListener("click", openMarketplaceSite);
 document.getElementById("closeMarketplaceBtn").addEventListener("click", closeMarketplaceView);
 document.getElementById("downloadPipelineToolBtn")?.addEventListener("click", downloadLatestPipelineTool);
 document.getElementById("connectPlatformAccountBtn")?.addEventListener("click", handlePlatformAccountConnect);
