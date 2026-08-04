@@ -126,6 +126,29 @@ Studio is already running instead of sharing the port between processes.
 6. **Run** invokes `main.py workflows/current/<filename>.json` and returns the
    actual process output to the Studio.
 
+### Workflow repository layout
+
+The Pipeline Tool repository carries the local asset folder skeleton so a fresh
+release always contains the expected folders:
+
+- `assets-repo/workflows/current/`
+- `assets-repo/workflows/list/`
+- `assets-repo/workflows/sample/`
+- `assets-repo/workflows/temp/`
+
+Only placeholder files and bundled samples are tracked by the Pipeline Tool
+repository. User workflow JSON files under `assets-repo/workflows/list/` are
+intended to be managed by the separate workflow repository:
+
+```text
+https://github.com/ds-infrax/InfraX-Pipeline-Tool-workflows
+```
+
+When `assets-repo/workflows/list/` is initialized as its own Git checkout, the
+Studio workflow Git actions use that folder as the Git root. Older installs
+that still keep Git metadata at `assets-repo/.git` continue to work as a
+fallback.
+
 The GUI and local API have the same loopback address, so local mode creates a
 temporary `HttpOnly`, `SameSite=Strict` session cookie for `/local-api` and a
 separate HttpOnly cookie scoped to `/api`. The secret is not exposed to page

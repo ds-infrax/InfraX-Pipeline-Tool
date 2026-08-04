@@ -55,6 +55,7 @@ assets-repo/workflows/temp/*
 !assets-repo/workflows/temp/.gitkeep
 
 assets-repo/workflows/list/*
+!assets-repo/workflows/list/.gitkeep
 
 assets-repo/workflows/sample/*
 !assets-repo/workflows/sample/.gitkeep

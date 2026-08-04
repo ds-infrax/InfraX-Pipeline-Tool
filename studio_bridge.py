@@ -1,4 +1,4 @@
-"""Secure loopback bridge for the InfraX browser workflow editor.
+﻿"""Secure loopback bridge for the InfraX browser workflow editor.
 
 The browser cannot directly run Python or access the local filesystem.  This
 module exposes only the fixed operations the editor needs:
@@ -2416,7 +2416,7 @@ class BridgeState:
                 self._remove_local_path(temporary_path)
 
     def _current_asset_git_commit(self) -> str | None:
-        if not (self.asset_root / ".git").exists():
+        if self._workflow_git_root() is None:
             return None
         try:
             result = self._run_workflow_git(["rev-parse", "--verify", "HEAD"], check=False, timeout=3.0)
@@ -2425,8 +2425,9 @@ class BridgeState:
         return result["stdout"].strip() if result["returnCode"] == 0 else None
 
     def _remote_asset_git_commit_for_path(self, relative_path: str) -> str | None:
-        if not (self.asset_root / ".git").exists():
+        if self._workflow_git_root() is None:
             return None
+        git_path = self._workflow_git_path_arg(relative_path)
         try:
             remote_result = self._run_workflow_git(["remote", "get-url", "origin"], check=False, timeout=5.0)
             if remote_result["returnCode"] != 0 or not remote_result["stdout"].strip():
@@ -2438,7 +2439,7 @@ class BridgeState:
             fetch_result = self._run_workflow_git(["fetch", "--quiet", "--no-tags", "origin"], check=False, timeout=10.0)
             if fetch_result["returnCode"] != 0:
                 return None
-            commit_result = self._run_workflow_git(["log", "-n", "1", "--format=%H", upstream, "--", relative_path], check=False, timeout=5.0)
+            commit_result = self._run_workflow_git(["log", "-n", "1", "--format=%H", upstream, "--", git_path], check=False, timeout=5.0)
         except BridgeError:
             return None
         return commit_result["stdout"].strip() if commit_result["returnCode"] == 0 and commit_result["stdout"].strip() else None
@@ -2455,8 +2456,9 @@ class BridgeState:
             status = "local"
         if status in {"marketplaceImported", "registered"} and asset.get("baseCommit"):
             try:
-                dirty_result = self._run_workflow_git(["diff", "--quiet", "--", relative_path], check=False, timeout=5.0)
-                staged_result = self._run_workflow_git(["diff", "--cached", "--quiet", "--", relative_path], check=False, timeout=5.0)
+                git_path = self._workflow_git_path_arg(relative_path)
+                dirty_result = self._run_workflow_git(["diff", "--quiet", "--", git_path], check=False, timeout=5.0)
+                staged_result = self._run_workflow_git(["diff", "--cached", "--quiet", "--", git_path], check=False, timeout=5.0)
             except BridgeError:
                 return status
             if dirty_result["returnCode"] != 0 or staged_result["returnCode"] != 0:
@@ -3032,6 +3034,7 @@ class BridgeState:
                 "동기화 표시는 workflows/list JSON 파일에만 사용할 수 있습니다.",
             )
         relative_path = path.relative_to(self.asset_root).as_posix()
+        git_path = self._workflow_git_path_arg(relative_path)
         with self.workflow_lock:
             registry = self._read_asset_registry_unlocked()
             current = registry.get(relative_path, {})
@@ -3095,15 +3098,16 @@ class BridgeState:
                 "Git에 반영할 워크플로우는 workflows/list의 JSON 파일이어야 합니다.",
             )
         relative_path = path.relative_to(self.asset_root).as_posix()
+        git_path = self._workflow_git_path_arg(relative_path)
         with self.workflow_lock:
             self._ensure_workflow_asset_revision_current(
                 relative_path,
                 marketplace_id=marketplace_id,
                 expected_marketplace_revision=expected_marketplace_revision,
             )
-            self._run_workflow_git(["add", "--", relative_path])
+            self._run_workflow_git(["add", "--", git_path])
             diff_check = self._run_workflow_git(
-                ["diff", "--cached", "--quiet", "--", relative_path],
+                ["diff", "--cached", "--quiet", "--", git_path],
                 check=False,
             )
             committed = diff_check["returnCode"] != 0
@@ -3457,18 +3461,35 @@ class BridgeState:
             )
 
     def _workflow_git_status(self) -> dict[str, Any]:
-        if not (self.asset_root / ".git").exists():
-            return {"enabled": False, "reason": "asset_root_not_git_repository"}
+        git_root = self._workflow_git_root()
+        if git_root is None:
+            return {"enabled": False, "reason": "workflow_git_not_configured"}
         result = self._run_workflow_git(
-            ["status", "--short", "--branch", "--", "workflows/list"],
+            ["status", "--short", "--branch", "--"],
             check=False,
         )
         return {
             "enabled": result["returnCode"] == 0,
+            "root": git_root.relative_to(self.asset_root).as_posix() if git_root != self.asset_root else ".",
             "returnCode": result["returnCode"],
             "stdout": result["stdout"],
             "stderr": result["stderr"],
         }
+
+    def _workflow_git_root(self) -> Path | None:
+        list_root = self._list_workflow_dir()
+        if (list_root / ".git").exists():
+            return list_root
+        if (self.asset_root / ".git").exists():
+            return self.asset_root
+        return None
+
+    def _workflow_git_path_arg(self, relative_path: str) -> str:
+        git_root = self._workflow_git_root()
+        if git_root == self._list_workflow_dir():
+            prefix = "workflows/list/"
+            return relative_path[len(prefix):] if relative_path.startswith(prefix) else relative_path
+        return relative_path
 
     def _run_workflow_git(
         self,
@@ -3477,17 +3498,18 @@ class BridgeState:
         check: bool = True,
         timeout: float = 120.0,
     ) -> dict[str, Any]:
-        if not (self.asset_root / ".git").exists():
+        git_root = self._workflow_git_root()
+        if git_root is None:
             raise BridgeError(
                 HTTPStatus.CONFLICT,
                 "workflow_git_not_configured",
-                "실행 도구 폴더가 Git 저장소가 아닙니다.",
+                "워크플로우 Git 저장소가 설정되지 않았습니다.",
             )
-        command = ["git", "-c", f"safe.directory={self.asset_root}", *args]
+        command = ["git", "-c", f"safe.directory={git_root}", *args]
         try:
             completed = subprocess.run(
                 command,
-                cwd=self.asset_root,
+                cwd=git_root,
                 text=True,
                 capture_output=True,
                 timeout=timeout,
@@ -3524,7 +3546,6 @@ class BridgeState:
                 details=result,
             )
         return result
-
     def _workflow_path(self, filename: str) -> Path:
         relative_path = _safe_workflow_relative_path(filename)
         candidate = self.workflows_dir / relative_path
@@ -6094,3 +6115,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

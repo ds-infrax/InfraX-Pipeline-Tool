@@ -211,6 +211,28 @@ class StudioBridgeTest(unittest.TestCase):
         self.server.shutdown()
         self.thread.join(timeout=5)
 
+    def test_workflow_git_can_use_list_folder_as_repo_root(self):
+        list_root = self.root / "workflows" / "list"
+        (list_root / ".git").mkdir(parents=True)
+        self.assertEqual(self.server.state._workflow_git_root(), list_root.resolve())
+        self.assertEqual(
+            self.server.state._workflow_git_path_arg("workflows/list/sample.json"),
+            "sample.json",
+        )
+
+        calls = []
+
+        def fake_run(command, **kwargs):
+            calls.append((command, kwargs.get("cwd")))
+            return mock.Mock(returncode=0, stdout="## main\n", stderr="")
+
+        with mock.patch("studio_bridge.subprocess.run", side_effect=fake_run):
+            status = self.server.state.workflow_git_status()
+
+        self.assertTrue(status["enabled"])
+        self.assertEqual(status["root"], "workflows/list")
+        self.assertEqual(calls[0][1], list_root.resolve())
+
     def request(
         self,
         method,
