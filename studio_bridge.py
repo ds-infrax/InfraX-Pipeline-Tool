@@ -662,7 +662,12 @@ def _platform_proxy_suffix(method: str, segments: list[str]) -> str | None:
     ) and method == "POST":
         return "/" + "/".join(decoded)
     if (
-        decoded in (["marketplace", "workflows"], ["marketplace", "modules"])
+        decoded
+        in (
+            ["marketplace", "workflows"],
+            ["marketplace", "modules"],
+            ["marketplace", "models"],
+        )
         and method == "GET"
     ):
         return "/" + "/".join(decoded)
@@ -671,6 +676,7 @@ def _platform_proxy_suffix(method: str, segments: list[str]) -> str | None:
         and decoded[:2] in (
             ["marketplace", "workflows"],
             ["marketplace", "modules"],
+            ["marketplace", "models"],
         )
         and _PACKAGE_ID_PATTERN.fullmatch(decoded[2])
         and method in {"GET", "PUT"}
@@ -680,13 +686,13 @@ def _platform_proxy_suffix(method: str, segments: list[str]) -> str | None:
         )
     if (
         len(decoded) == 4
-        and decoded[:2] == ["marketplace", "modules"]
+        and decoded[:2] in (["marketplace", "modules"], ["marketplace", "models"])
         and _PACKAGE_ID_PATTERN.fullmatch(decoded[2])
         and decoded[3] == "download"
         and method in {"GET", "HEAD"}
     ):
         return (
-            "/marketplace/modules/"
+            "/" + "/".join(decoded[:2]) + "/"
             + quote(decoded[2], safe="")
             + "/download"
         )
@@ -1117,6 +1123,61 @@ class BridgeState:
             total_size,
         )
 
+    def _collect_local_model_files(
+        self,
+        package_root: Path,
+    ) -> tuple[list[tuple[Path, str, int]], int]:
+        """Collect model package files while excluding local metadata/secrets."""
+
+        files: list[tuple[Path, str, int]] = []
+        total_size = 0
+        for current_root, directory_names, file_names in os.walk(
+            package_root,
+            topdown=True,
+            followlinks=False,
+        ):
+            current_path = Path(current_root)
+            directory_names[:] = [
+                directory_name
+                for directory_name in directory_names
+                if directory_name.casefold()
+                not in {".git", "__pycache__", ".venv", "venv", "env"}
+                and not _path_is_linklike(current_path / directory_name)
+            ]
+            for file_name in file_names:
+                candidate = current_path / file_name
+                lowered = file_name.casefold()
+                if (
+                    lowered == PACKAGE_MANIFEST_FILENAME.casefold()
+                    or lowered.endswith((".tmp", ".bak", ".log", ".pyc", ".pyo"))
+                    or lowered in {".env", ".gitignore"}
+                    or _path_is_linklike(candidate)
+                    or not candidate.is_file()
+                ):
+                    continue
+                try:
+                    relative_path = candidate.relative_to(
+                        package_root
+                    ).as_posix()
+                    file_size = candidate.stat().st_size
+                except (OSError, ValueError):
+                    continue
+                files.append((candidate, relative_path, file_size))
+                total_size += file_size
+                if (
+                    len(files) > MAX_PACKAGE_ENTRIES - 1
+                    or total_size > MAX_PACKAGE_UNCOMPRESSED_BYTES
+                ):
+                    raise BridgeError(
+                        HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                        "package_archive_too_large",
+                        "로컬 모델 패키지가 게시 안전 한도를 넘습니다.",
+                    )
+        return (
+            sorted(files, key=lambda item: item[1].casefold()),
+            total_size,
+        )
+
     def list_local_custom_node_packages(self) -> list[dict[str, Any]]:
         """List custom_nodes package repos and catalog-confirmed nodes."""
 
@@ -1218,6 +1279,52 @@ class BridgeState:
                 }
             )
         return sorted(packages, key=lambda package: package["id"].casefold())
+
+    def list_local_model_packages(self) -> list[dict[str, Any]]:
+        """List models/develop package folders that can be published."""
+
+        package_root = self.package_roots["model-pack"]
+        develop_root = package_root / "develop"
+        packages: list[dict[str, Any]] = []
+        if not develop_root.is_dir() or _path_is_linklike(develop_root):
+            return packages
+        for candidate in sorted(develop_root.iterdir(), key=lambda path: path.name.casefold()):
+            if not candidate.is_dir() or _path_is_linklike(candidate):
+                continue
+            try:
+                package_id = _validate_package_id(candidate.name)
+                install_path = candidate.resolve(strict=True).relative_to(
+                    self.asset_root
+                ).as_posix()
+                files, total_size = self._collect_local_model_files(candidate)
+            except (BridgeError, OSError, ValueError):
+                continue
+            if not files:
+                continue
+            packages.append(
+                {
+                    "id": package_id,
+                    "name": candidate.name,
+                    "kind": "model-pack",
+                    "source": "models",
+                    "installPath": install_path,
+                    "nodeTypes": [],
+                    "fileCount": len(files),
+                    "size": total_size,
+                }
+            )
+        return packages
+
+    def local_publishable_package(self, package_id: str) -> dict[str, Any]:
+        safe_id = _validate_package_id(package_id)
+        for package in self.list_local_custom_node_packages() + self.list_local_model_packages():
+            if package["id"] == safe_id:
+                return package
+        raise BridgeError(
+            HTTPStatus.NOT_FOUND,
+            "local_publishable_package_not_found",
+            "게시 가능한 develop 패키지를 찾을 수 없습니다.",
+        )
 
     def _run_package_git(
         self,
@@ -1369,6 +1476,103 @@ class BridgeState:
                         HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
                         "package_archive_too_large",
                         "생성된 로컬 노드 ZIP이 허용 크기를 넘습니다.",
+                    )
+            except Exception:
+                self._remove_local_path(archive_path)
+                raise
+            return {
+                "path": archive_path,
+                "size": archive_size,
+                "fileName": f"{package_id}-{metadata['version']}.zip",
+                "package": local_package,
+            }
+
+    def build_local_publishable_archive(
+        self,
+        package_id: str,
+        metadata: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Archive one develop package for Marketplace publishing."""
+
+        local_package = self.local_publishable_package(package_id)
+        if local_package["kind"] == "node-pack":
+            return self.build_local_custom_node_archive(package_id, metadata)
+
+        package_root = (self.asset_root / local_package["installPath"]).resolve()
+        with self.package_lock:
+            if (
+                not package_root.is_dir()
+                or _path_is_linklike(package_root)
+            ):
+                raise BridgeError(
+                    HTTPStatus.NOT_FOUND,
+                    "local_model_package_not_found",
+                    "선택한 models/develop 패키지를 찾을 수 없습니다.",
+                )
+            try:
+                package_root.relative_to(self.package_roots["model-pack"] / "develop")
+            except ValueError as error:
+                raise BridgeError(
+                    HTTPStatus.BAD_REQUEST,
+                    "local_model_package_invalid",
+                    "models/develop package path is invalid.",
+                ) from error
+            files, total_size = self._collect_local_model_files(package_root)
+            if not files:
+                raise BridgeError(
+                    HTTPStatus.CONFLICT,
+                    "local_model_package_empty",
+                    "게시할 모델 파일이 없습니다.",
+                )
+            if total_size + MIN_PACKAGE_DISK_RESERVE > shutil.disk_usage(self.root).free:
+                raise BridgeError(
+                    HTTPStatus.INSUFFICIENT_STORAGE,
+                    "package_disk_space_insufficient",
+                    "로컬 모델 ZIP을 만들 디스크 여유 공간이 부족합니다.",
+                )
+
+            descriptor, temporary_name = tempfile.mkstemp(
+                prefix=f".{package_id}.local-model-",
+                suffix=".zip",
+                dir=self.root,
+            )
+            os.close(descriptor)
+            archive_path = Path(temporary_name)
+            manifest = {
+                "schema": "infrax.package.v1",
+                "id": package_id,
+                "name": metadata["name"],
+                "version": metadata["version"],
+                "kind": "model-pack",
+                "sha256": "0" * 64,
+                "nodeTypes": [],
+                "source": "local-model-develop",
+            }
+            try:
+                with zipfile.ZipFile(
+                    archive_path,
+                    mode="w",
+                    compression=zipfile.ZIP_DEFLATED,
+                    compresslevel=6,
+                    allowZip64=True,
+                ) as archive:
+                    for source, relative_path, _ in files:
+                        archive.write(source, arcname=relative_path)
+                    archive.writestr(
+                        PACKAGE_MANIFEST_FILENAME,
+                        json.dumps(
+                            manifest,
+                            ensure_ascii=False,
+                            indent=2,
+                        )
+                        + "\n",
+                    )
+                archive_size = archive_path.stat().st_size
+                if archive_size > self.package_archive_limit:
+                    raise BridgeError(
+                        HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                        "package_archive_too_large",
+                        "생성된 모델 ZIP이 허용 크기를 넘습니다.",
                     )
             except Exception:
                 self._remove_local_path(archive_path)
@@ -1565,11 +1769,11 @@ class BridgeState:
             )
 
         package_root = self.package_roots[metadata["kind"]]
-        if install_channel and metadata["kind"] != "node-pack":
+        if install_channel and metadata["kind"] not in {"node-pack", "model-pack"}:
             raise BridgeError(
                 HTTPStatus.UNPROCESSABLE_ENTITY,
                 "package_install_channel_invalid",
-                "설치 채널은 노드 패키지에만 사용할 수 있습니다.",
+                "설치 채널은 노드 또는 모델 패키지에만 사용할 수 있습니다.",
             )
         if install_channel not in {"", "market"}:
             raise BridgeError(
@@ -1608,7 +1812,7 @@ class BridgeState:
                 raise BridgeError(
                     HTTPStatus.UNPROCESSABLE_ENTITY,
                     "package_install_channel_invalid",
-                    "패키지 설치 폴더가 custom_nodes 바로 아래의 안전한 폴더가 아닙니다.",
+                    "패키지 설치 폴더가 패키지 루트 바로 아래의 안전한 폴더가 아닙니다.",
                 )
             if _path_is_linklike(target) or (target.exists() and not target.is_dir()):
                 raise BridgeError(
@@ -2293,9 +2497,13 @@ class BridgeState:
                     discovered += 1
                     if discovered > MAX_PACKAGE_ENTRIES:
                         break
-                    relative_path = (
-                        package["id"] + "/" + relative_inside_package
-                    )
+                    try:
+                        package_prefix = package_root.relative_to(
+                            self.package_roots["model-pack"]
+                        ).as_posix()
+                    except ValueError:
+                        package_prefix = package["id"]
+                    relative_path = package_prefix + "/" + relative_inside_package
                     models.append(
                         {
                             "id": package["id"] + ":" + relative_inside_package,
@@ -2382,7 +2590,7 @@ class BridgeState:
         except ValueError as error:
             raise ValueError("invalid install path") from error
         path_parts = relative_candidate.parts
-        if metadata["kind"] == "node-pack" and len(path_parts) == 2:
+        if metadata["kind"] in {"node-pack", "model-pack"} and len(path_parts) == 2:
             if path_parts[0] != "market":
                 raise ValueError("invalid install path")
             _validate_package_id(path_parts[1])
@@ -4307,7 +4515,8 @@ class StudioBridgeHandler(BaseHTTPRequestHandler):
                     HTTPStatus.OK,
                     {
                         "ok": True,
-                        "packages": state.list_local_custom_node_packages(),
+                        "packages": state.list_local_custom_node_packages()
+                        + state.list_local_model_packages(),
                     },
                 )
                 return
@@ -4387,7 +4596,9 @@ class StudioBridgeHandler(BaseHTTPRequestHandler):
                         archive_path,
                         archive_digest,
                         install_channel=(
-                            "market" if metadata.get("kind") == "node-pack" else ""
+                            "market"
+                            if metadata.get("kind") in {"node-pack", "model-pack"}
+                            else ""
                         ),
                     )
                 finally:
@@ -5058,19 +5269,23 @@ class StudioBridgeHandler(BaseHTTPRequestHandler):
             )
         try:
             with state.package_lock:
-                state._package_by_id_unlocked(package_id)
+                installed_registry_package = state._package_by_id_unlocked(package_id)
         except BridgeError as error:
             if error.code != "installed_package_not_found":
                 raise
         else:
-            raise BridgeError(
-                HTTPStatus.CONFLICT,
-                "installed_package_republish_not_allowed",
-                "Marketplace에서 설치한 패키지는 자동으로 다시 게시할 수 없습니다.",
-            )
-        installed = state.local_custom_node_package(package_id)
+            registry_install_path = str(
+                installed_registry_package.get("installPath", "")
+            ).replace("\\", "/")
+            if "/market/" in f"/{registry_install_path}/":
+                raise BridgeError(
+                    HTTPStatus.CONFLICT,
+                    "installed_package_republish_not_allowed",
+                    "Marketplace에서 설치한 패키지는 자동으로 다시 게시할 수 없습니다.",
+                )
+        installed = state.local_publishable_package(package_id)
         metadata = self._validate_publish_metadata(value, installed)
-        archive = state.build_local_custom_node_archive(
+        archive = state.build_local_publishable_archive(
             package_id,
             metadata,
         )
@@ -5295,6 +5510,7 @@ class StudioBridgeHandler(BaseHTTPRequestHandler):
         if method == "GET" and segments in (
             ["api", "marketplace", "workflows"],
             ["api", "marketplace", "modules"],
+            ["api", "marketplace", "models"],
         ):
             self._send_json(
                 HTTPStatus.OK,

@@ -3,8 +3,14 @@ function renderMarketplaceNodeSelection() {
   const root = document.getElementById("marketplaceNodeOptions");
   const nodeTypesInput = document.getElementById("marketplacePackageNodeTypes");
   if (!container || !root || !nodeTypesInput) return;
-  container.classList.toggle("hidden", !LOCAL_STUDIO_MODE);
-  if (!LOCAL_STUDIO_MODE) return;
+  const packageKind = document.getElementById("marketplacePackageKind")?.value;
+  const shouldHide = !LOCAL_STUDIO_MODE || packageKind === "model-pack";
+  container.classList.toggle("hidden", shouldHide);
+  if (shouldHide) {
+    root.innerHTML = "";
+    if (packageKind === "model-pack") nodeTypesInput.value = "";
+    return;
+  }
   const selected = new Set(
     String(nodeTypesInput.value || "")
       .split(",")
@@ -44,8 +50,12 @@ function renderMarketplaceNodeSelection() {
 function normalizeLocalPublishablePackage(pkg, source) {
   if (!pkg || typeof pkg !== "object") return null;
   const id = String(pkg.id || "").trim();
-  if (!id || pkg.kind !== "node-pack" || source !== "custom_nodes") return null;
-  const kind = "node-pack";
+  if (
+    !id
+    || !["node-pack", "model-pack"].includes(pkg.kind)
+    || !["custom_nodes", "models"].includes(source)
+  ) return null;
+  const kind = pkg.kind === "model-pack" ? "model-pack" : "node-pack";
   return {
     id,
     name: String(pkg.name || id).trim() || id,
@@ -78,12 +88,14 @@ function renderLocalPublishablePackages() {
   const select = document.getElementById("marketplaceLocalPackageSelect");
   if (!select) return;
   const previous = select.value;
+  const expectedKind = marketplacePackageKindForTab(marketplaceTab);
+  const packages = localPublishablePackages.filter(pkg => pkg.kind === expectedKind);
   if (localPublishablePackageStatus === "loading") {
     select.innerHTML = `<option value="">로컬 패키지 목록을 불러오는 중...</option>`;
     select.disabled = true;
     return;
   }
-  if (!localPublishablePackages.length) {
+  if (!packages.length) {
     select.innerHTML = `<option value="">게시 가능한 로컬 패키지가 없습니다.</option>`;
     select.disabled = true;
     return;
@@ -91,12 +103,12 @@ function renderLocalPublishablePackages() {
   select.disabled = false;
   select.innerHTML = [
     `<option value="">catalog 확인 노드 패키지를 선택하세요</option>`,
-    ...localPublishablePackages.map(pkg => {
+    ...packages.map(pkg => {
       const kindLabel = pkg.kind === "model-pack" ? "모델" : "노드";
       return `<option value="${escapeHtml(pkg.id)}">${escapeHtml(pkg.name)} · ${kindLabel} · ${escapeHtml(pkg.installPath || "custom_nodes")}</option>`;
     }),
   ].join("");
-  if (localPublishablePackages.some(pkg => pkg.id === previous)) {
+  if (packages.some(pkg => pkg.id === previous)) {
     select.value = previous;
   }
 }
@@ -113,7 +125,7 @@ async function syncLocalPublishablePackages(options = {}) {
     }
     const byId = new Map();
     result.packages.forEach(pkg => {
-      const normalized = normalizeLocalPublishablePackage(pkg, "custom_nodes");
+      const normalized = normalizeLocalPublishablePackage(pkg, pkg?.source || "custom_nodes");
       if (normalized && !byId.has(normalized.id)) byId.set(normalized.id, normalized);
     });
     localPublishablePackages = [...byId.values()].sort((left, right) => (
@@ -159,15 +171,18 @@ function applyLocalPublishablePackageSelection() {
 }
 
 async function prepareDefaultLocalPackageRegistration() {
-  if (!LOCAL_STUDIO_MODE || marketplaceTab !== "module") return false;
+  if (!LOCAL_STUDIO_MODE || !["module", "model"].includes(marketplaceTab)) return false;
   const packages = await syncLocalPublishablePackages({ notify: false });
   const form = document.getElementById("marketplaceRegisterForm");
   if (!form || !packages.length) return false;
+  const expectedKind = marketplacePackageKindForTab(marketplaceTab);
+  const eligiblePackages = packages.filter(pkg => pkg.kind === expectedKind);
+  if (!eligiblePackages.length) return false;
   const select = form.elements.localPackageId;
   if (select && !select.value) {
-    select.value = marketplaceFocusPackageId && packages.some(pkg => pkg.id === marketplaceFocusPackageId)
+    select.value = marketplaceFocusPackageId && eligiblePackages.some(pkg => pkg.id === marketplaceFocusPackageId)
       ? marketplaceFocusPackageId
-      : packages[0].id;
+      : eligiblePackages[0].id;
   }
   applyLocalPublishablePackageSelection();
   syncMarketplaceSourceFields();
@@ -226,6 +241,11 @@ function initMarketplaceRegistration() {
 
   document.querySelectorAll('input[name="sourceType"]').forEach(input => {
     input.addEventListener("change", syncMarketplaceSourceFields);
+  });
+
+  document.getElementById("marketplacePackageKind")?.addEventListener("change", () => {
+    renderLocalPublishablePackages();
+    renderMarketplaceNodeSelection();
   });
 
   document.getElementById("marketplaceLocalPackageSelect")?.addEventListener(

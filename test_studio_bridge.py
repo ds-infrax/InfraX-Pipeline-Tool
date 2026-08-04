@@ -545,7 +545,7 @@ class StudioBridgeTest(unittest.TestCase):
         self.assertIsNone(body["user"])
         self.assertTrue(body["localStudio"])
 
-        for resource in ("workflows", "modules"):
+        for resource in ("workflows", "modules", "models"):
             status, _, body = self.request(
                 "GET",
                 f"/api/marketplace/{resource}",
@@ -1122,6 +1122,68 @@ class StudioBridgeTest(unittest.TestCase):
             [],
         )
 
+    def test_model_package_installs_from_marketplace_into_market_models(self):
+        self.server.platform_api_base = "https://platform.example/pipeline/api"
+        self.server.set_platform_access_token("ixm_" + ("m" * 43))
+        archive = self.package_zip([("weights.bin", b"\x01\x02\x03\x04")])
+        metadata = self.package_metadata(
+            "vision-model",
+            archive,
+            kind="model-pack",
+            nodeTypes=[],
+        )
+        FakeHTTPSConnection.reset(
+            FakePlatformResponse(
+                200,
+                archive,
+                {
+                    "Content-Type": "application/zip",
+                    "Content-Length": str(len(archive)),
+                },
+            )
+        )
+        with mock.patch(
+            "studio_bridge.http.client.HTTPSConnection",
+            FakeHTTPSConnection,
+        ):
+            status, _, body = self.request(
+                "POST",
+                "/local-api/packages/vision-model/install-from-marketplace",
+                payload=metadata,
+            )
+        self.assertEqual(status, 200)
+        self.assertEqual(body["package"]["id"], "vision-model")
+        self.assertEqual(
+            body["package"]["installPath"],
+            "models/market/vision-model",
+        )
+        self.assertTrue(
+            (
+                self.root
+                / "models"
+                / "market"
+                / "vision-model"
+                / "weights.bin"
+            ).is_file()
+        )
+        self.assertEqual(
+            body["catalog"]["models"],
+            [
+                {
+                    "id": "vision-model:weights.bin",
+                    "name": "weights.bin",
+                    "relative_path": "market/vision-model/weights.bin",
+                    "path": "models/market/vision-model/weights.bin",
+                    "size": 4,
+                    "package_ref": {
+                        "package_id": "vision-model",
+                        "version": "1.0.0",
+                        "digest": metadata["sha256"],
+                    },
+                }
+            ],
+        )
+
     def test_git_marketplace_item_is_not_followed_by_local_installer(self):
         self.server.platform_api_base = "https://platform.example/pipeline/api"
         archive = self.package_zip([("nodes.py", "value = 1\n")])
@@ -1235,14 +1297,28 @@ class StudioBridgeTest(unittest.TestCase):
     def test_marketplace_installed_package_cannot_be_republished(self):
         source_archive = self.package_zip([("nodes.py", "value = 1\n")])
         metadata = self.package_metadata("publish-node", source_archive)
-        status, _, _ = self.install_package(
-            "publish-node",
-            source_archive,
-            metadata,
-        )
-        self.assertEqual(status, 200)
         self.server.platform_api_base = "https://platform.example/pipeline/api"
         self.server.set_platform_access_token("ixm_" + ("p" * 43))
+        FakeHTTPSConnection.reset(
+            FakePlatformResponse(
+                200,
+                source_archive,
+                {
+                    "Content-Type": "application/zip",
+                    "Content-Length": str(len(source_archive)),
+                },
+            )
+        )
+        with mock.patch(
+            "studio_bridge.http.client.HTTPSConnection",
+            FakeHTTPSConnection,
+        ):
+            status, _, _ = self.request(
+                "POST",
+                "/local-api/packages/publish-node/install-from-marketplace",
+                payload=metadata,
+            )
+        self.assertEqual(status, 200)
         FakeHTTPSConnection.reset()
         with mock.patch(
             "studio_bridge.http.client.HTTPSConnection",

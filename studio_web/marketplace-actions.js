@@ -430,6 +430,50 @@ async function openNodePackageMarketplaceAction(packageId) {
   requestAnimationFrame(() => document.getElementById("marketplacePackageName")?.focus());
 }
 
+async function openModelPackageMarketplaceAction(packageId) {
+  if (!requireServerWriteAccess()) return;
+  marketplaceTab = "model";
+  marketplaceFocusPackageId = packageId;
+  marketplaceFocusNodeType = null;
+  moduleRegisterOpen = true;
+  openMarketplaceView();
+  const packages = await syncLocalPublishablePackages({ notify: true });
+  const localPackage = packages.find(pkg => pkg.id === packageId && pkg.kind === "model-pack");
+  if (!localPackage) {
+    showToast(`${packageId} 로컬 모델 패키지를 찾지 못했습니다. 모델은 models/develop 아래 패키지 폴더여야 합니다.`);
+    return;
+  }
+  const existing = registeredMarketplacePackages.find(item => (
+    !item.workflow
+    && item.kind === "model-pack"
+    && item.id === packageId
+  ));
+  if (existing?.canManage) {
+    const merge = confirm(`${localPackage.name} 모델은 Marketplace에 이미 등록되어 있습니다.\n\n확인: 기존 등록을 수정/업데이트\n취소: 새 등록 폼에서 이름을 바꿔 준비`);
+    if (merge) {
+      editRegisteredPackage(existing.id);
+      return;
+    }
+  }
+  resetMarketplaceRegisterForm();
+  const form = document.getElementById("marketplaceRegisterForm");
+  if (!form) return;
+  const localSource = form.querySelector('input[name="sourceType"][value="local-package"]');
+  if (localSource) localSource.checked = true;
+  if (form.elements.localPackageId) form.elements.localPackageId.value = localPackage.id;
+  form.elements.name.value = existing ? `${localPackage.name}_copy` : localPackage.name;
+  form.elements.version.value = localPackage.version && isSemanticVersion(localPackage.version)
+    ? localPackage.version
+    : "1.0.0";
+  form.elements.description.value = localPackage.description || `${localPackage.name} 모델 패키지입니다.`;
+  if (form.elements.kind) form.elements.kind.value = "model-pack";
+  if (form.elements.nodeTypes) form.elements.nodeTypes.value = "";
+  if (form.elements.author) form.elements.author.value = authState.user?.displayName || localAuthorProfile || "";
+  syncMarketplaceSourceFields();
+  renderMarketplace();
+  requestAnimationFrame(() => document.getElementById("marketplacePackageName")?.focus());
+}
+
 function openNodeTypeMarketplaceAction(nodeType) {
   const pkg = marketplacePackageForNodeType(nodeType);
   if (pkg?.canManage) {
@@ -456,6 +500,7 @@ window.editRegisteredWorkflow = editRegisteredWorkflow;
 window.openWorkflowFileMarketplaceAction = openWorkflowFileMarketplaceAction;
 window.openNodeTypeMarketplaceAction = openNodeTypeMarketplaceAction;
 window.openNodePackageMarketplaceAction = openNodePackageMarketplaceAction;
+window.openModelPackageMarketplaceAction = openModelPackageMarketplaceAction;
 
 function installMarketplacePackage(packageId, openWorkflow = false) {
   const pkg = marketplacePackages.find(item => item.id === packageId);

@@ -1969,11 +1969,32 @@ function renderModelPalette() {
           const repoDetails = document.createElement("details");
           repoDetails.className = "node-tree-group node-tree-repo-group";
           repoDetails.open = true;
+          const isDevelopModelPackage = repoGroup.tree.base === "develop";
+          const modelPackageId = safeId(repoGroup.tree.repo);
+          const existingModelPackage = registeredMarketplacePackages.find(item => (
+            !item.workflow
+            && item.kind === "model-pack"
+            && item.id === modelPackageId
+          ));
+          const packageAction = !serverWritesEnabled() || !isDevelopModelPackage
+            ? ""
+            : existingModelPackage
+              ? marketplaceActionButton(
+                  existingModelPackage.canManage ? "수정" : "등록됨",
+                  `openModelPackageMarketplaceAction(${inlineJson(modelPackageId)})`,
+                  existingModelPackage.canManage ? "" : "readonly"
+                )
+              : marketplaceActionButton(
+                  "등록",
+                  `openModelPackageMarketplaceAction(${inlineJson(modelPackageId)})`,
+                  "new"
+                );
           repoDetails.innerHTML = `
             <summary class="node-tree-repo-summary">
               <span class="material-symbols-outlined" aria-hidden="true">folder_open</span>
               <b>${escapeHtml(repoGroup.tree.repoLabel)}</b>
               <small>${repoGroup.models.length} models</small>
+              ${packageAction}
             </summary>
           `;
           const fileList = document.createElement("div");
@@ -6003,17 +6024,33 @@ async function syncMarketplaceModulesFromServer(options = {}) {
     && requestStorageScope === activeStorageScope
   );
   try {
-    const response = await apiFetch("/marketplace/modules", {
-      headers: { "Accept": "application/json" },
-      timeoutMs: PLATFORM_REQUEST_TIMEOUT_MS,
-    });
-    const result = await response.json().catch(() => ({}));
-    if (!response.ok || !Array.isArray(result.items)) throw new Error(responseErrorMessage(response, result));
+    const fetchPackageList = async path => {
+      const response = await apiFetch(path, {
+        headers: { "Accept": "application/json" },
+        timeoutMs: PLATFORM_REQUEST_TIMEOUT_MS,
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !Array.isArray(result.items)) {
+        throw new Error(responseErrorMessage(response, result));
+      }
+      return result.items;
+    };
+    const moduleItems = await fetchPackageList("/marketplace/modules");
+    let modelItems = [];
+    try {
+      modelItems = await fetchPackageList("/marketplace/models");
+    } catch (modelSyncError) {
+      modelItems = [];
+    }
     if (!isCurrentRequest()) return null;
     const workflowPackages = registeredMarketplacePackages.filter(item => item.workflow);
-    const serverModulePackages = result.items
+    const byId = new Map();
+    [...moduleItems, ...modelItems]
       .filter(item => (item?.kind === "node-pack" || item?.kind === "model-pack") && !item?.workflow)
-      .map(item => ({ ...item, registrationOnly: true }));
+      .forEach(item => {
+        if (!byId.has(item.id)) byId.set(item.id, { ...item, registrationOnly: true });
+      });
+    const serverModulePackages = [...byId.values()];
     registeredMarketplacePackages = [...workflowPackages, ...serverModulePackages];
     persistAuxiliaryState();
     renderMarketplace();
