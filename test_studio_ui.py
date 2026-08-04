@@ -9,6 +9,7 @@ MARKETPLACE_NAVIGATION_SOURCE = (ROOT / "studio_web" / "marketplace-navigation.j
 STYLE_SOURCE = (ROOT / "studio_web" / "styles.css").read_text(encoding="utf-8")
 HTML_SOURCE = (ROOT / "studio_web" / "index.html").read_text(encoding="utf-8")
 ORCHID_ASSET = ROOT / "studio_web" / "assets" / "ink-orchid-watermark.jpg"
+INFRAX_LOGO_ASSET = ROOT / "studio_web" / "assets" / "infrax-logo-white.png"
 
 
 class StudioNodeWidgetRenderingTest(unittest.TestCase):
@@ -243,6 +244,12 @@ class StudioSidebarNavigationTest(unittest.TestCase):
     def test_marketplace_entry_is_preserved(self):
         self.assertIn('id="marketplaceBtn"', HTML_SOURCE)
         self.assertIn('title="등록된 Marketplace 목록 보기"', HTML_SOURCE)
+        self.assertTrue(INFRAX_LOGO_ASSET.is_file())
+        marketplace_header_start = HTML_SOURCE.index('<header class="marketplace-view-head">')
+        marketplace_header_end = HTML_SOURCE.index('</header>', marketplace_header_start)
+        marketplace_header = HTML_SOURCE[marketplace_header_start:marketplace_header_end]
+        self.assertIn('src="./assets/infrax-logo-white.png"', marketplace_header)
+        self.assertNotIn(">iX<", marketplace_header)
         self.assertIn('id="openMarketplaceShortcutBtn"', HTML_SOURCE)
         self.assertIn('title="Marketplace 바로가기"', HTML_SOURCE)
         self.assertIn('<script src="./marketplace-navigation.js"></script>', HTML_SOURCE)
