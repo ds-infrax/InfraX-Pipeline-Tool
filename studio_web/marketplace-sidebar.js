@@ -59,6 +59,22 @@ function marketplaceVisiblePackagesForTab(tab = marketplaceTab) {
   });
 }
 
+function marketplaceNodeRepoName(pkg) {
+  if (!pkg || pkg.kind !== "node-pack" || pkg.workflow) return "";
+  const sourcePath = String(pkg.source?.url || pkg.source?.path || "").trim();
+  if (sourcePath) {
+    const tail = sourcePath
+      .replace(/[?#].*$/, "")
+      .replace(/\/+$/, "")
+      .split(/[/:\\]/)
+      .filter(Boolean)
+      .pop();
+    const sourceRepo = safeId(String(tail || "").replace(/\.git$/i, ""));
+    if (sourceRepo) return sourceRepo;
+  }
+  return marketplaceInstallName(pkg);
+}
+
 function renderSidebarMarketplace() {
   const root = document.getElementById("sidebarMarketplaceList");
   if (!root) return;
@@ -81,10 +97,11 @@ function renderSidebarMarketplace() {
         ? isNodePackageInCustomNodes(pkg)
         : isMarketplacePackageInstalled(pkg);
     const kindLabel = pkg.kind === "model-pack" ? "모델" : isWorkspace ? "워크플로우" : "노드";
+    const repoName = isNodePack ? marketplaceNodeRepoName(pkg) : "";
     const sourceLabel = isWorkspace
       ? `${pkg.workflow?.data?.nodes?.length || 0} nodes`
       : isNodePack
-        ? `${pkg.id || "package"}`
+        ? `${repoName || pkg.id || "package"}`
         : pkg.source?.type === "git"
           ? "Git"
           : pkg.source?.type === "zip"
@@ -96,7 +113,7 @@ function renderSidebarMarketplace() {
     const actionLabel = alreadyPresent ? "있음" : isWorkspace ? "목록에 추가" : "가져오기";
     const disabledAttr = alreadyPresent ? ' disabled aria-disabled="true"' : "";
     return `
-      <button class="sidebar-market-card ${alreadyPresent ? "already-added" : ""}" type="button" title="${escapeHtml(isNodePack ? `custom_nodes/${pkg.id || "package"}` : sourceLabel)}" onclick="${action}"${disabledAttr}>
+      <button class="sidebar-market-card ${alreadyPresent ? "already-added" : ""}" type="button" title="${escapeHtml(isNodePack ? `custom_nodes/market/${repoName || pkg.id || "package"}` : sourceLabel)}" onclick="${action}"${disabledAttr}>
         <span>
           <b>${escapeHtml(pkg.name || "Untitled")}</b>
           <small>${escapeHtml(kindLabel)} · v${escapeHtml(pkg.version || "1.0.0")} · ${sourceLabel}</small>
@@ -111,13 +128,13 @@ function renderSidebarMarketplace() {
   }
   const groups = new Map();
   visiblePackages.forEach(pkg => {
-    const key = `${pkg.id || "package"}`;
+    const key = marketplaceNodeRepoName(pkg) || `${pkg.id || "package"}`;
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(pkg);
   });
   root.innerHTML = [...groups.entries()].map(([folder, packages]) => `
     <details class="node-tree-group sidebar-market-tree" open>
-      <summary title="${escapeHtml(`custom_nodes/${folder}`)}">
+      <summary title="${escapeHtml(`custom_nodes/market/${folder}`)}">
         <span class="material-symbols-outlined" aria-hidden="true">folder</span>
         <b>${escapeHtml(folder)}</b>
         <small>${packages.length} items</small>
