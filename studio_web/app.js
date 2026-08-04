@@ -1,4 +1,4 @@
-const workflow = {
+﻿const workflow = {
   last_node_id: 6,
   last_link_id: 5,
   nodes: [
@@ -1386,137 +1386,6 @@ function customNodePackageId(base, repo) {
   return safeId(repo || base || "package");
 }
 
-function isNodePackageInCustomNodes(pkg) {
-  if (!pkg || pkg.kind === "workflow-bundle" || pkg.workflow) return false;
-  if (pkg.kind === "model-pack") return isMarketplacePackageInstalled(pkg);
-  const id = String(pkg.id || "").trim();
-  const nodeTypes = new Set(marketplaceNodeTypes(pkg));
-  if (localPublishablePackages.some(item => (
-    item.id === id
-    || item.installPath === `custom_nodes/${id}`
-    || item.installPath === `custom_nodes/market/${id}`
-    || item.nodeTypes?.some(type => nodeTypes.has(type))
-  ))) return true;
-  return installedLocalPackages.some(item => (
-    item?.id === id
-    || item?.installPath === `custom_nodes/${id}`
-    || item?.installPath === `custom_nodes/market/${id}`
-    || item?.source === "custom_nodes"
-    || item?.nodeTypes?.some(type => nodeTypes.has(type))
-  ));
-}
-
-function marketplaceWorkflowPackages() {
-  return [...registeredMarketplacePackages, ...marketplacePackages]
-    .filter(pkg => pkg.workflow || pkg.kind === "workflow-bundle");
-}
-
-function normalizeComparableName(value) {
-  return safeId(String(value || "").replace(/\.json$/i, "")).toLowerCase();
-}
-
-function marketplacePackageForWorkflowFile(fileName) {
-  const workflowName = String(fileName || "").replace(/\.json$/i, "");
-  const candidates = new Set([
-    normalizeComparableName(workflowName),
-    normalizeComparableName(`${workflowName}_current`),
-    normalizeComparableName(fileName),
-  ].filter(Boolean));
-  return marketplaceWorkflowPackages().find(pkg => {
-    const pkgCandidates = [
-      pkg.id,
-      pkg.name,
-      pkg.workflow?.name,
-      pkg.sourceWorkflowId,
-    ].map(normalizeComparableName).filter(Boolean);
-    return pkgCandidates.some(value => candidates.has(value));
-  }) || null;
-}
-
-function isMarketplaceWorkflowInList(pkg) {
-  if (!pkg) return false;
-  return serverWorkflowItems.some(item => marketplacePackageForWorkflowFile(item.fileName)?.id === pkg.id);
-}
-
-function marketplaceVisiblePackagesForTab(tab = marketplaceTab) {
-  const allMarketplacePackages = [...registeredMarketplacePackages, ...marketplacePackages];
-  return allMarketplacePackages.filter(pkg => {
-    const isWorkspace = pkg.kind === "workflow-bundle" || Boolean(pkg.workflow);
-    if (tab === "workspace") return isWorkspace;
-    return !isWorkspace && pkg.kind === marketplacePackageKindForTab(tab);
-  });
-}
-
-function renderSidebarMarketplace() {
-  const root = document.getElementById("sidebarMarketplaceList");
-  if (!root) return;
-  document.querySelectorAll("[data-marketplace-side-tab]").forEach(button => {
-    const active = button.dataset.marketplaceSideTab === marketplaceTab;
-    button.classList.toggle("active", active);
-    button.setAttribute("aria-selected", String(active));
-  });
-  const visiblePackages = marketplaceVisiblePackagesForTab();
-  if (!visiblePackages.length) {
-    root.innerHTML = `<div class="kv"><span>등록된 ${escapeHtml(marketplaceTargetLabel(marketplaceTab))} 항목이 없습니다.</span></div>`;
-    return;
-  }
-  const renderPackageCard = pkg => {
-    const isWorkspace = pkg.kind === "workflow-bundle" || Boolean(pkg.workflow);
-    const isNodePack = pkg.kind === "node-pack" && !isWorkspace;
-    const alreadyPresent = isWorkspace
-      ? isMarketplaceWorkflowInList(pkg)
-      : isNodePack
-        ? isNodePackageInCustomNodes(pkg)
-        : isMarketplacePackageInstalled(pkg);
-    const kindLabel = pkg.kind === "model-pack" ? "모델" : isWorkspace ? "워크플로우" : "노드";
-    const sourceLabel = isWorkspace
-      ? `${pkg.workflow?.data?.nodes?.length || 0} nodes`
-      : isNodePack
-        ? `${pkg.id || "package"}`
-        : pkg.source?.type === "git"
-          ? "Git"
-          : pkg.source?.type === "zip"
-            ? "ZIP"
-            : "등록";
-    const action = isWorkspace
-      ? `downloadRegisteredWorkflow(${inlineJson(pkg.id)})`
-      : `downloadMarketplacePackage(${inlineJson(pkg.id)})`;
-    const actionLabel = alreadyPresent ? "있음" : isWorkspace ? "목록에 추가" : "가져오기";
-    const disabledAttr = alreadyPresent ? ' disabled aria-disabled="true"' : "";
-    return `
-      <button class="sidebar-market-card ${alreadyPresent ? "already-added" : ""}" type="button" title="${escapeHtml(isNodePack ? `custom_nodes/${pkg.id || "package"}` : sourceLabel)}" onclick="${action}"${disabledAttr}>
-        <span>
-          <b>${escapeHtml(pkg.name || "Untitled")}</b>
-          <small>${escapeHtml(kindLabel)} · v${escapeHtml(pkg.version || "1.0.0")} · ${sourceLabel}</small>
-        </span>
-        <em>${escapeHtml(actionLabel)}</em>
-      </button>
-    `;
-  };
-  if (marketplaceTab !== "module") {
-    root.innerHTML = visiblePackages.map(renderPackageCard).join("");
-    return;
-  }
-  const groups = new Map();
-  visiblePackages.forEach(pkg => {
-    const key = `${pkg.id || "package"}`;
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(pkg);
-  });
-  root.innerHTML = [...groups.entries()].map(([folder, packages]) => `
-    <details class="node-tree-group sidebar-market-tree" open>
-      <summary title="${escapeHtml(`custom_nodes/${folder}`)}">
-        <span class="material-symbols-outlined" aria-hidden="true">folder</span>
-        <b>${escapeHtml(folder)}</b>
-        <small>${packages.length} items</small>
-      </summary>
-      <div class="node-tree-list">
-        ${packages.map(renderPackageCard).join("")}
-      </div>
-    </details>
-  `).join("");
-}
-
 function marketplaceActionButton(label, action, extraClass = "") {
   if (!serverWritesEnabled()) return "";
   return `<button class="market-mini-action ${extraClass}" type="button" onclick="event.stopPropagation(); ${action}">${escapeHtml(label)}</button>`;
@@ -2288,49 +2157,6 @@ function isMarketplacePackageInstalled(pkg) {
   return downloadedMarketplacePackageIds.includes(pkg.id);
 }
 
-function renderMarketplaceNodeSelection() {
-  const container = document.getElementById("marketplaceNodeSelection");
-  const root = document.getElementById("marketplaceNodeOptions");
-  const nodeTypesInput = document.getElementById("marketplacePackageNodeTypes");
-  if (!container || !root || !nodeTypesInput) return;
-  container.classList.toggle("hidden", !LOCAL_STUDIO_MODE);
-  if (!LOCAL_STUDIO_MODE) return;
-  const selected = new Set(
-    String(nodeTypesInput.value || "")
-      .split(",")
-      .map(value => value.trim())
-      .filter(Boolean)
-  );
-  const focusedPackage = marketplaceFocusPackageId
-    ? localPublishablePackages.find(pkg => pkg.id === marketplaceFocusPackageId)
-    : null;
-  const allowedNodeTypes = focusedPackage
-    ? new Set(focusedPackage.nodeTypes || [])
-    : null;
-  const nodes = [...new Map(
-    scriptLibrary
-      .filter(script => script?.type && (!allowedNodeTypes || allowedNodeTypes.has(script.type)))
-      .map(script => [String(script.type), script])
-  ).values()];
-  if (!nodes.length) {
-    root.innerHTML = `<span class="marketplace-registration-note">탐색된 노드가 없습니다.</span>`;
-    return;
-  }
-  root.innerHTML = nodes.map(script => `
-    <label class="marketplace-node-option">
-      <input type="checkbox" value="${escapeHtml(script.type)}" ${selected.has(String(script.type)) ? "checked" : ""} />
-      <span>${escapeHtml(script.name || script.type)} · ${escapeHtml(script.type)}</span>
-    </label>
-  `).join("");
-  root.querySelectorAll('input[type="checkbox"]').forEach(input => {
-    input.addEventListener("change", () => {
-      nodeTypesInput.value = [...root.querySelectorAll('input[type="checkbox"]:checked')]
-        .map(item => item.value)
-        .join(", ");
-    });
-  });
-}
-
 async function syncInstalledLocalPackages() {
   if (!LOCAL_STUDIO_MODE || !localToolContextId) return [];
   try {
@@ -2351,124 +2177,6 @@ async function syncInstalledLocalPackages() {
     // Catalog, workflow editing and execution stay fully available.
     return null;
   }
-}
-
-function normalizeLocalPublishablePackage(pkg, source) {
-  if (!pkg || typeof pkg !== "object") return null;
-  const id = String(pkg.id || "").trim();
-  if (!id || pkg.kind !== "node-pack" || source !== "custom_nodes") return null;
-  const kind = "node-pack";
-  return {
-    id,
-    name: String(pkg.name || id).trim() || id,
-    version: typeof pkg.version === "string" ? pkg.version.trim() : "",
-    description: typeof pkg.description === "string" ? pkg.description.trim() : "",
-    author: typeof pkg.author === "string" ? pkg.author.trim() : "",
-    kind,
-    nodeTypes: [...new Set(
-      (Array.isArray(pkg.nodeTypes) ? pkg.nodeTypes : [])
-        .filter(value => typeof value === "string" && value.trim())
-        .map(value => value.trim())
-    )],
-    installPath: typeof pkg.installPath === "string" ? pkg.installPath.trim() : "",
-    fileCount: Number.isFinite(Number(pkg.fileCount)) ? Number(pkg.fileCount) : 0,
-    size: Number.isFinite(Number(pkg.size)) ? Number(pkg.size) : 0,
-    source,
-  };
-}
-
-function renderLocalPublishablePackages() {
-  const select = document.getElementById("marketplaceLocalPackageSelect");
-  if (!select) return;
-  const previous = select.value;
-  if (localPublishablePackageStatus === "loading") {
-    select.innerHTML = `<option value="">로컬 패키지 목록을 불러오는 중...</option>`;
-    select.disabled = true;
-    return;
-  }
-  if (!localPublishablePackages.length) {
-    select.innerHTML = `<option value="">게시할 수 있는 로컬 패키지가 없습니다.</option>`;
-    select.disabled = true;
-    return;
-  }
-  select.disabled = false;
-  select.innerHTML = [
-    `<option value="">catalog 확인 노드 패키지를 선택하세요</option>`,
-    ...localPublishablePackages.map(pkg => {
-      const kindLabel = pkg.kind === "model-pack" ? "모델" : "노드";
-      return `<option value="${escapeHtml(pkg.id)}">${escapeHtml(pkg.name)} · ${kindLabel} · 로컬 custom_nodes</option>`;
-    }),
-  ].join("");
-  if (localPublishablePackages.some(pkg => pkg.id === previous)) {
-    select.value = previous;
-  }
-}
-
-async function syncLocalPublishablePackages(options = {}) {
-  if (!LOCAL_STUDIO_MODE) return [];
-  localPublishablePackageStatus = "loading";
-  renderLocalPublishablePackages();
-  try {
-    const response = await localToolFetch("custom-node-packages");
-    const result = await response.json().catch(() => ({}));
-    if (!response.ok || !Array.isArray(result.packages)) {
-      throw new Error(result.error?.message || result.error || `HTTP ${response.status}`);
-    }
-    const byId = new Map();
-    result.packages.forEach(pkg => {
-      const normalized = normalizeLocalPublishablePackage(pkg, "custom_nodes");
-      if (normalized && !byId.has(normalized.id)) byId.set(normalized.id, normalized);
-    });
-    localPublishablePackages = [...byId.values()].sort((left, right) => (
-      left.name.localeCompare(right.name, "ko")
-    ));
-    localPublishablePackageStatus = "ready";
-    renderLocalPublishablePackages();
-    return localPublishablePackages;
-  } catch (error) {
-    localPublishablePackages = [];
-    localPublishablePackageStatus = "error";
-    renderLocalPublishablePackages();
-    if (options.notify) {
-      showToast(`이 PC 노드 패키지 조회 실패: ${error.message || "조회 오류"}`);
-    }
-    return [];
-  }
-}
-
-function applyLocalPublishablePackageSelection() {
-  const form = document.getElementById("marketplaceRegisterForm");
-  const packageId = String(form?.elements.localPackageId?.value || "");
-  const pkg = localPublishablePackages.find(item => item.id === packageId);
-  if (!form || !pkg) return;
-  marketplaceFocusPackageId = pkg.id;
-  form.elements.name.value = pkg.name;
-  if (pkg.version && isSemanticVersion(pkg.version)) {
-    form.elements.version.value = pkg.version;
-  }
-  if (pkg.description) form.elements.description.value = pkg.description;
-  form.elements.kind.value = pkg.kind;
-  form.elements.nodeTypes.value = pkg.nodeTypes.join(", ");
-  if (pkg.author && !authState.user) form.elements.author.value = pkg.author;
-  renderMarketplaceNodeSelection();
-}
-
-async function prepareDefaultLocalPackageRegistration() {
-  if (!LOCAL_STUDIO_MODE || marketplaceTab !== "module") return false;
-  const packages = await syncLocalPublishablePackages({ notify: false });
-  const form = document.getElementById("marketplaceRegisterForm");
-  if (!form || !packages.length) return false;
-  const localSource = form.querySelector('input[name="sourceType"][value="local-package"]');
-  if (localSource) localSource.checked = true;
-  const select = form.elements.localPackageId;
-  if (select && !select.value) {
-    select.value = marketplaceFocusPackageId && packages.some(pkg => pkg.id === marketplaceFocusPackageId)
-      ? marketplaceFocusPackageId
-      : packages[0].id;
-  }
-  applyLocalPublishablePackageSelection();
-  syncMarketplaceSourceFields();
-  return true;
 }
 
 function isPackageMarketplaceTab(tab) {
@@ -6718,44 +6426,6 @@ function displayNodeTitle(node) {
   return getScriptForNode(node)?.name || node.type;
 }
 
-function resetMarketplaceRegisterForm() {
-  editingModulePackageId = null;
-  marketplaceFocusPackageId = null;
-  const form = document.getElementById("marketplaceRegisterForm");
-  form?.reset();
-  if (form?.elements.version) form.elements.version.value = "1.0.0";
-  if (form?.elements.author) {
-    form.elements.author.value = authState.user?.displayName || localAuthorProfile || "";
-  }
-  const title = document.getElementById("marketplaceRegisterTitle");
-  const submitLabel = document.getElementById("marketplaceRegisterSubmitLabel");
-  const error = document.getElementById("marketplaceRegisterError");
-  if (form?.elements.kind) form.elements.kind.value = marketplacePackageKindForTab(marketplaceTab) === "model-pack" ? "model-pack" : "node-pack";
-  if (title) title.textContent = `${marketplaceTargetLabel(marketplaceTab)} 등록`;
-  if (submitLabel) submitLabel.textContent = "Marketplace 서버에 등록";
-  if (error) error.textContent = "";
-  syncMarketplaceSourceFields();
-}
-
-function toggleModuleRegisterPanel() {
-  const willOpen = !moduleRegisterOpen;
-  moduleRegisterOpen = willOpen;
-  if (willOpen) {
-    resetMarketplaceRegisterForm();
-  } else {
-    editingModulePackageId = null;
-  }
-  const authorInput = document.getElementById("marketplacePackageAuthor");
-  if (authorInput && !authorInput.value) {
-    authorInput.value = authState.user?.displayName || localAuthorProfile;
-  }
-  syncMarketplaceSourceFields();
-  renderMarketplace();
-  if (moduleRegisterOpen) {
-    requestAnimationFrame(() => document.getElementById("marketplacePackageName")?.focus());
-  }
-}
-
 function openDeveloperTools() {
   document.getElementById("developerPanel")?.classList.remove("hidden");
   renderScriptLibrary();
@@ -7250,7 +6920,6 @@ function exportWorkflowForDownload() {
 
 document.getElementById("undoBtn").addEventListener("click", undo);
 document.getElementById("redoBtn").addEventListener("click", redo);
-document.getElementById("marketplaceBtn").addEventListener("click", openMarketplaceSite);
 document.getElementById("closeMarketplaceBtn").addEventListener("click", closeMarketplaceView);
 document.getElementById("downloadPipelineToolBtn")?.addEventListener("click", downloadLatestPipelineTool);
 document.getElementById("connectPlatformAccountBtn")?.addEventListener("click", handlePlatformAccountConnect);
@@ -7292,46 +6961,13 @@ document.getElementById("developerToolsBtn")?.addEventListener("click", openDeve
 document.getElementById("closeDeveloperToolsBtn")?.addEventListener("click", closeDeveloperTools);
 document.getElementById("closeHistoryBtn")?.addEventListener("click", closeHistoryPanel);
 document.getElementById("drawerScrim")?.addEventListener("click", closeHistoryPanel);
-document.getElementById("openModuleRegisterBtn")?.addEventListener("click", async () => {
-  toggleModuleRegisterPanel();
-  if (moduleRegisterOpen) {
-    const prepared = await prepareDefaultLocalPackageRegistration();
-    if (prepared) renderMarketplace();
-  }
-});
 document.getElementById("recoverLegacyDraftBtn")?.addEventListener("click", recoverLegacyDraft);
 document.getElementById("retryAuthStartupBtn")?.addEventListener("click", () => window.location.reload());
 document.getElementById("refreshExplorerBtn")?.addEventListener("click", refreshLocalExplorer);
 document.getElementById("refreshServerWorkflowsBtn")?.addEventListener("click", () => syncServerWorkflows({ notify: true }));
 document.getElementById("nodeSearchInput")?.addEventListener("input", renderNodePalette);
-document.getElementById("marketplaceRegisterForm")?.addEventListener("submit", registerMarketplacePackage);
-document.getElementById("resetMarketplaceRegisterBtn")?.addEventListener("click", resetMarketplaceRegisterForm);
-document.querySelectorAll('input[name="sourceType"]').forEach(input => {
-  input.addEventListener("change", syncMarketplaceSourceFields);
-});
-document.getElementById("marketplaceLocalPackageSelect")?.addEventListener(
-  "change",
-  applyLocalPublishablePackageSelection
-);
-syncMarketplaceSourceFields();
 document.querySelectorAll("[data-marketplace-tab]").forEach(button => {
   button.addEventListener("click", () => setMarketplaceTab(button.dataset.marketplaceTab));
-});
-document.querySelectorAll("[data-marketplace-side-tab]").forEach(button => {
-  button.addEventListener("click", () => setMarketplaceTab(button.dataset.marketplaceSideTab));
-});
-document.getElementById("refreshSidebarMarketplaceBtn")?.addEventListener("click", async () => {
-  await syncMarketplaceFromServer({ notify: true });
-  if (LOCAL_STUDIO_MODE) {
-    await Promise.allSettled([
-      syncInstalledLocalPackages(),
-      syncLocalPublishablePackages(),
-    ]);
-  }
-  renderSidebarMarketplace();
-});
-document.getElementById("openMarketplaceShortcutBtn")?.addEventListener("click", () => {
-  openMarketplaceSite();
 });
 document.getElementById("historyBtn").addEventListener("click", focusHistoryPanel);
 document.getElementById("fitBtn").addEventListener("click", fitView);
@@ -7782,3 +7418,4 @@ async function initializeApplication() {
 
 window.recoverLegacyDraft = recoverLegacyDraft;
 void initializeApplication();
+
