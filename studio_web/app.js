@@ -2822,6 +2822,20 @@ function platformSiteUrl() {
   }
 }
 
+function openMarketplaceSite() {
+  const siteUrl = platformSiteUrl();
+  if (!siteUrl) {
+    showToast("운영 Marketplace 사이트 주소가 설정되지 않았습니다.");
+    return;
+  }
+  const popup = window.open(siteUrl.toString(), "_blank", "noopener,noreferrer");
+  if (popup) {
+    popup.opener = null;
+  } else {
+    globalThis.location.assign(siteUrl.toString());
+  }
+}
+
 function isLoopbackOrigin(value) {
   try {
     const parsed = new URL(value);
@@ -7287,7 +7301,7 @@ document.getElementById("refreshSidebarMarketplaceBtn")?.addEventListener("click
   renderSidebarMarketplace();
 });
 document.getElementById("openMarketplaceShortcutBtn")?.addEventListener("click", () => {
-  openMarketplaceView({ fullList: true });
+  openMarketplaceSite();
 });
 document.getElementById("historyBtn").addEventListener("click", focusHistoryPanel);
 document.getElementById("fitBtn").addEventListener("click", fitView);
