@@ -1105,6 +1105,90 @@ class StudioBridgeTest(unittest.TestCase):
         )
         self.assertFalse((self.root / "custom_nodes" / "git-node").exists())
 
+    def test_git_marketplace_item_clones_into_market_custom_nodes(self):
+        def fake_run(command, **_kwargs):
+            if command[:3] == ["git", "clone", "--depth"]:
+                target = Path(command[-1])
+                target.mkdir(parents=True, exist_ok=True)
+                (target / "nodes.py").write_text(
+                    "class GitMarketplaceNode:\n    pass\n",
+                    encoding="utf-8",
+                )
+                (target / ".git").mkdir()
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            if len(command) >= 5 and command[0] == "git" and command[-2:] == [
+                "rev-parse",
+                "HEAD",
+            ]:
+                return mock.Mock(
+                    returncode=0,
+                    stdout="0123456789abcdef0123456789abcdef01234567\n",
+                    stderr="",
+                )
+            if command and str(command[-1]).endswith("catalog.py"):
+                (self.root / "catalog.json").write_text(
+                    json.dumps(
+                        {
+                            "schema": "workflow.catalog.v1",
+                            "runtime": {"id": "test"},
+                            "nodes": [
+                                {
+                                    "key": "basic.NumberInput",
+                                    "name": "NumberInput",
+                                }
+                            ],
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                return mock.Mock(returncode=0, stdout="catalog refreshed", stderr="")
+            raise AssertionError(f"unexpected command: {command!r}")
+
+        payload = self.package_metadata(
+            "git-node",
+            b"placeholder",
+            sha256="0" * 64,
+            nodeTypes=[],
+        )
+        payload.update(
+            {
+                "sourceType": "git",
+                "sourcePath": "https://github.com/example/git-node.git",
+                "installName": "friendly-node",
+            }
+        )
+
+        with mock.patch("studio_bridge.subprocess.run", side_effect=fake_run):
+            status, _, body = self.request(
+                "POST",
+                "/local-api/packages/git-node/install-from-marketplace",
+                payload=payload,
+            )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(
+            body["package"]["installPath"],
+            "custom_nodes/market/friendly-node",
+        )
+        self.assertTrue(
+            (
+                self.root
+                / "custom_nodes"
+                / "market"
+                / "friendly-node"
+                / "nodes.py"
+            ).is_file()
+        )
+        self.assertFalse(
+            (
+                self.root
+                / "custom_nodes"
+                / "market"
+                / "friendly-node"
+                / ".git"
+            ).exists()
+        )
+
     def test_marketplace_installed_package_cannot_be_republished(self):
         source_archive = self.package_zip([("nodes.py", "value = 1\n")])
         metadata = self.package_metadata("publish-node", source_archive)

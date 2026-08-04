@@ -40,7 +40,10 @@ def build_project_catalog(output_path=None, runtime_id="local-dev"):
     catalog = build_catalog(runtime_id=runtime_id, node_modules=NODE_MODULES)
 
     if output_path:
-        Path(output_path).write_text(json.dumps(catalog, indent=2))
+        Path(output_path).write_text(
+            json.dumps(catalog, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
 
     return catalog
 

@@ -224,6 +224,7 @@ let activeLocalToolRoot = "";
 let installedLocalPackages = [];
 let localPublishablePackages = [];
 let localPublishablePackageStatus = "idle";
+let marketplaceFocusPackageId = null;
 let pipelineToolRelease = null;
 let pipelineToolReleaseStatus = "loading";
 let pipelineToolReleaseError = "";
@@ -1006,6 +1007,7 @@ function renderAll() {
   renderWorkflowList();
   renderServerWorkflowList();
   renderNodePalette();
+  renderModelPalette();
   renderScriptLibrary();
   renderMarketplace();
   renderNodes();
@@ -1222,6 +1224,12 @@ function safeId(value) {
   return String(value || "item").trim().toLowerCase().replace(/[^a-z0-9_.-]+/g, "_");
 }
 
+function marketplaceInstallName(pkg) {
+  const id = String(pkg?.id || "").trim();
+  const withoutGeneratedPrefix = id.replace(/^module_\d+_+/i, "");
+  return safeId(withoutGeneratedPrefix || pkg?.name || id || "node");
+}
+
 function ensureProjectShape() {
   projectStore = Array.isArray(projectStore) && projectStore.length
     ? projectStore
@@ -1305,11 +1313,17 @@ function marketplacePackageForNodeType(nodeType) {
 function nodePackagePathFromModule(moduleName) {
   const parts = String(moduleName || "").split(".").filter(Boolean);
   if (parts[0] === "custom_nodes" && parts[1]) {
+    const base = parts[1];
+    const repo = parts[2] || "";
     return {
       root: "custom_nodes",
-      packageId: parts[1],
-      path: parts.slice(0, Math.max(2, parts.length - 1)).join("/"),
-      label: `custom_nodes/${parts[1]}`,
+      base,
+      repo,
+      packageId: repo || base,
+      path: parts.slice(0, Math.max(repo ? 3 : 2, parts.length - 1)).join("/"),
+      label: repo ? `custom_nodes/${base}/${repo}` : `custom_nodes/${base}`,
+      baseLabel: `custom_nodes/${base}`,
+      repoLabel: repo || base,
     };
   }
   if (parts[0] === "app") {
@@ -1330,6 +1344,46 @@ function nodePackagePathFromModule(moduleName) {
 
 function nodePackagePathForScript(script) {
   return nodePackagePathFromModule(script?.path || script?.command || script?.module || "");
+}
+
+function customNodeTreeInfo(script) {
+  const moduleTree = nodePackagePathForScript(script);
+  const typeParts = String(script?.type || "").split(".").filter(Boolean);
+  if (moduleTree.root === "custom_nodes" && moduleTree.base) {
+    const base = moduleTree.base;
+    const repo = moduleTree.repo || typeParts[1] || moduleTree.packageId;
+    const nodeType = typeParts[0] === base && typeParts[1] === repo
+      ? typeParts.slice(2).join(".")
+      : typeParts.slice(Math.max(0, typeParts.length - 2)).join(".");
+    return {
+      root: "custom_nodes",
+      base,
+      repo,
+      baseLabel: `custom_nodes/${base}`,
+      repoLabel: repo,
+      packageId: repo,
+      nodeTypeLabel: nodeType || script?.name || script?.type || "",
+    };
+  }
+  return {
+    root: moduleTree.root,
+    base: moduleTree.label,
+    repo: "",
+    baseLabel: moduleTree.label,
+    repoLabel: moduleTree.root === "app" ? "built-in" : moduleTree.label,
+    packageId: moduleTree.packageId,
+    nodeTypeLabel: script?.type || script?.name || "",
+  };
+}
+
+function marketplacePackageForNodeScripts(scripts) {
+  return scripts
+    .map(script => marketplacePackageForNodeType(script.type))
+    .find(Boolean) || null;
+}
+
+function customNodePackageId(base, repo) {
+  return safeId(repo || base || "package");
 }
 
 function isNodePackageInCustomNodes(pkg) {
@@ -1791,7 +1845,7 @@ function selectLinkFromList(linkId) {
 
 window.selectLinkFromList = selectLinkFromList;
 
-function renderNodePalette() {
+function renderNodePaletteLegacy() {
   const root = document.getElementById("nodePalette");
   if (!root) return;
   if (!catalogReady) {
@@ -1844,7 +1898,7 @@ function renderNodePalette() {
           el.innerHTML = `
             <div class="asset-card-row">
               <b>${escapeHtml(script.name || script.type)}</b>
-              ${action}
+              ${packageAction}
             </div>
             <span>${escapeHtml(script.type)} · ${script.outputs?.length || 0} outputs</span>
           `;
@@ -1859,6 +1913,230 @@ function renderNodePalette() {
     root.innerHTML = `<div class="kv"><span>검색 조건에 맞는 로컬 노드가 없습니다.</span></div>`;
   }
   renderExplorerStatus();
+}
+
+function renderNodePalette() {
+  const root = document.getElementById("nodePalette");
+  if (!root) return;
+  if (!catalogReady) {
+    root.innerHTML = LOCAL_STUDIO_MODE
+      ? `<div class="kv"><span>${explorerState.statusMessage ? "노드 목록을 불러오지 못했습니다. 다시 조회해 주세요." : "노드 목록을 준비하는 중입니다."}</span></div>`
+      : `<div class="kv"><span>로컬 툴 연결 후 catalog.json에서 확인된 노드가 여기에 표시됩니다.</span></div>`;
+    renderExplorerStatus();
+    return;
+  }
+
+  const query = document.getElementById("nodeSearchInput")?.value.trim().toLowerCase() || "";
+  const types = [...new Map(scriptLibrary.map(script => [script.type, script])).values()]
+    .filter(script => !query
+      || String(script.name || "").toLowerCase().includes(query)
+      || String(script.type || "").toLowerCase().includes(query));
+
+  root.innerHTML = "";
+  const baseGroups = new Map();
+  types.forEach(script => {
+    const tree = customNodeTreeInfo(script);
+    const baseKey = tree.baseLabel;
+    if (!baseGroups.has(baseKey)) {
+      baseGroups.set(baseKey, { tree, repos: new Map(), scripts: [] });
+    }
+    const baseGroup = baseGroups.get(baseKey);
+    baseGroup.scripts.push(script);
+    const repoKey = tree.repoLabel || tree.baseLabel;
+    if (!baseGroup.repos.has(repoKey)) {
+      baseGroup.repos.set(repoKey, { tree, scripts: [] });
+    }
+    baseGroup.repos.get(repoKey).scripts.push(script);
+  });
+
+  [...baseGroups.values()]
+    .sort((left, right) => left.tree.baseLabel.localeCompare(right.tree.baseLabel, "ko"))
+    .forEach(baseGroup => {
+      const details = document.createElement("details");
+      details.className = "node-tree-group";
+      details.open = true;
+      details.innerHTML = `
+        <summary>
+          <span class="material-symbols-outlined" aria-hidden="true">folder</span>
+          <b>${escapeHtml(baseGroup.tree.baseLabel)}</b>
+          <small>${baseGroup.scripts.length} nodes</small>
+        </summary>
+      `;
+
+      const repoList = document.createElement("div");
+      repoList.className = "node-tree-list node-tree-repo-list";
+      [...baseGroup.repos.values()]
+        .sort((left, right) => left.tree.repoLabel.localeCompare(right.tree.repoLabel, "ko"))
+        .forEach(repoGroup => {
+          const repoDetails = document.createElement("details");
+          repoDetails.className = "node-tree-group node-tree-repo-group";
+          repoDetails.open = true;
+          const pkg = marketplacePackageForNodeScripts(repoGroup.scripts);
+          const localPackageId = customNodePackageId(repoGroup.tree.base, repoGroup.tree.repo);
+          const action = !serverWritesEnabled()
+            ? ""
+            : pkg
+              ? marketplaceActionButton(pkg.canManage ? "수정" : "등록됨", `openNodeTypeMarketplaceAction(${inlineJson(repoGroup.scripts[0]?.type || "")})`, pkg.canManage ? "" : "readonly")
+              : marketplaceActionButton("등록", `openNodeTypeMarketplaceAction(${inlineJson(repoGroup.scripts[0]?.type || "")})`, "new");
+
+          const packageAction = !serverWritesEnabled()
+            ? ""
+            : pkg
+              ? marketplaceActionButton(pkg.canManage ? "수정" : "등록됨", `openNodePackageMarketplaceAction(${inlineJson(localPackageId)})`, pkg.canManage ? "" : "readonly")
+              : marketplaceActionButton("등록", `openNodePackageMarketplaceAction(${inlineJson(localPackageId)})`, "new");
+          repoDetails.innerHTML = `
+            <summary class="node-tree-repo-summary">
+              <span class="material-symbols-outlined" aria-hidden="true">folder_open</span>
+              <b>${escapeHtml(repoGroup.tree.repoLabel)}</b>
+              <small>${repoGroup.scripts.length} nodes</small>
+              ${action}
+            </summary>
+          `;
+
+          const nodeList = document.createElement("div");
+          nodeList.className = "node-tree-list node-tree-node-list";
+          repoGroup.scripts
+            .sort((left, right) => customNodeTreeInfo(left).nodeTypeLabel.localeCompare(customNodeTreeInfo(right).nodeTypeLabel, "ko"))
+            .forEach(script => {
+              const itemTree = customNodeTreeInfo(script);
+              const el = document.createElement("div");
+              el.className = "nav-item palette-item node-tree-item";
+              el.draggable = true;
+              el.innerHTML = `
+                <div class="asset-card-row">
+                  <b>${escapeHtml(itemTree.nodeTypeLabel)}</b>
+                </div>
+                <span>${escapeHtml(script.type)} · ${script.outputs?.length || 0} outputs</span>
+              `;
+              el.addEventListener("click", () => addNode(script.type));
+              el.addEventListener("dragstart", event => event.dataTransfer.setData("text/plain", script.type));
+              nodeList.appendChild(el);
+            });
+
+          repoDetails.appendChild(nodeList);
+          repoList.appendChild(repoDetails);
+        });
+
+      details.appendChild(repoList);
+      root.appendChild(details);
+    });
+
+  if (!types.length) {
+    root.innerHTML = `<div class="kv"><span>검색 조건에 맞는 로컬 노드가 없습니다.</span></div>`;
+  }
+  renderExplorerStatus();
+}
+
+function modelTreeInfo(model) {
+  const path = String(model?.path || model?.relative_path || model?.name || "").replace(/\\/g, "/");
+  const parts = path.split("/").filter(Boolean);
+  const modelIndex = parts[0] === "models" ? 1 : 0;
+  const base = parts[modelIndex] || "models";
+  const repo = parts[modelIndex + 1] || catalogModelPackageLabel(model) || "local";
+  const fileParts = parts.slice(modelIndex + 2);
+  const fileLabel = fileParts.join("/") || String(model?.name || model?.path || "model");
+  return {
+    base,
+    repo,
+    baseLabel: `models/${base}`,
+    repoLabel: repo,
+    fileLabel,
+  };
+}
+
+function formatBytes(value) {
+  const size = Number(value);
+  if (!Number.isFinite(size) || size < 0) return "";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let amount = size;
+  let unitIndex = 0;
+  while (amount >= 1024 && unitIndex < units.length - 1) {
+    amount /= 1024;
+    unitIndex += 1;
+  }
+  return `${amount >= 10 || unitIndex === 0 ? amount.toFixed(0) : amount.toFixed(1)} ${units[unitIndex]}`;
+}
+
+function renderModelPalette() {
+  const root = document.getElementById("modelPalette");
+  if (!root) return;
+  const query = document.getElementById("modelSearchInput")?.value.trim().toLowerCase() || "";
+  const models = catalogModels.filter(model => !query
+    || String(model.name || "").toLowerCase().includes(query)
+    || String(model.path || "").toLowerCase().includes(query)
+    || catalogModelPackageLabel(model).toLowerCase().includes(query));
+  root.innerHTML = "";
+  if (!models.length) {
+    root.innerHTML = `<div class="kv"><span>${query ? "검색 조건에 맞는 모델이 없습니다." : "catalog.json에서 확인된 모델이 없습니다."}</span></div>`;
+    return;
+  }
+
+  const baseGroups = new Map();
+  models.forEach(model => {
+    const tree = modelTreeInfo(model);
+    if (!baseGroups.has(tree.baseLabel)) {
+      baseGroups.set(tree.baseLabel, { tree, repos: new Map(), models: [] });
+    }
+    const baseGroup = baseGroups.get(tree.baseLabel);
+    baseGroup.models.push(model);
+    if (!baseGroup.repos.has(tree.repoLabel)) {
+      baseGroup.repos.set(tree.repoLabel, { tree, models: [] });
+    }
+    baseGroup.repos.get(tree.repoLabel).models.push(model);
+  });
+
+  [...baseGroups.values()]
+    .sort((left, right) => left.tree.baseLabel.localeCompare(right.tree.baseLabel, "ko"))
+    .forEach(baseGroup => {
+      const details = document.createElement("details");
+      details.className = "node-tree-group model-tree-group";
+      details.open = true;
+      details.innerHTML = `
+        <summary>
+          <span class="material-symbols-outlined" aria-hidden="true">folder</span>
+          <b>${escapeHtml(baseGroup.tree.baseLabel)}</b>
+          <small>${baseGroup.models.length} models</small>
+        </summary>
+      `;
+      const repoList = document.createElement("div");
+      repoList.className = "node-tree-list node-tree-repo-list";
+      [...baseGroup.repos.values()]
+        .sort((left, right) => left.tree.repoLabel.localeCompare(right.tree.repoLabel, "ko"))
+        .forEach(repoGroup => {
+          const repoDetails = document.createElement("details");
+          repoDetails.className = "node-tree-group node-tree-repo-group";
+          repoDetails.open = true;
+          repoDetails.innerHTML = `
+            <summary class="node-tree-repo-summary">
+              <span class="material-symbols-outlined" aria-hidden="true">folder_open</span>
+              <b>${escapeHtml(repoGroup.tree.repoLabel)}</b>
+              <small>${repoGroup.models.length} models</small>
+            </summary>
+          `;
+          const fileList = document.createElement("div");
+          fileList.className = "node-tree-list node-tree-node-list";
+          repoGroup.models
+            .sort((left, right) => modelTreeInfo(left).fileLabel.localeCompare(modelTreeInfo(right).fileLabel, "ko"))
+            .forEach(model => {
+              const tree = modelTreeInfo(model);
+              const packageLabel = catalogModelPackageLabel(model);
+              const sizeLabel = formatBytes(model.size);
+              const el = document.createElement("div");
+              el.className = "nav-item palette-item node-tree-item model-tree-item";
+              el.innerHTML = `
+                <div class="asset-card-row">
+                  <b>${escapeHtml(tree.fileLabel)}</b>
+                </div>
+                <span>${escapeHtml(model.path || model.name)}${packageLabel ? ` · ${escapeHtml(packageLabel)}` : ""}${sizeLabel ? ` · ${escapeHtml(sizeLabel)}` : ""}</span>
+              `;
+              fileList.appendChild(el);
+            });
+          repoDetails.appendChild(fileList);
+          repoList.appendChild(repoDetails);
+        });
+      details.appendChild(repoList);
+      root.appendChild(details);
+    });
 }
 
 function renderExplorerStatus() {
@@ -2023,9 +2301,15 @@ function renderMarketplaceNodeSelection() {
       .map(value => value.trim())
       .filter(Boolean)
   );
+  const focusedPackage = marketplaceFocusPackageId
+    ? localPublishablePackages.find(pkg => pkg.id === marketplaceFocusPackageId)
+    : null;
+  const allowedNodeTypes = focusedPackage
+    ? new Set(focusedPackage.nodeTypes || [])
+    : null;
   const nodes = [...new Map(
     scriptLibrary
-      .filter(script => script?.type)
+      .filter(script => script?.type && (!allowedNodeTypes || allowedNodeTypes.has(script.type)))
       .map(script => [String(script.type), script])
   ).values()];
   if (!nodes.length) {
@@ -2086,6 +2370,9 @@ function normalizeLocalPublishablePackage(pkg, source) {
         .filter(value => typeof value === "string" && value.trim())
         .map(value => value.trim())
     )],
+    installPath: typeof pkg.installPath === "string" ? pkg.installPath.trim() : "",
+    fileCount: Number.isFinite(Number(pkg.fileCount)) ? Number(pkg.fileCount) : 0,
+    size: Number.isFinite(Number(pkg.size)) ? Number(pkg.size) : 0,
     source,
   };
 }
@@ -2858,84 +3145,72 @@ async function downloadMarketplacePackage(packageId) {
   const pkg = [...registeredMarketplacePackages, ...marketplacePackages].find(item => item.id === packageId);
   if (!pkg || pkg.workflow) return;
   if (pkg.registrationOnly) {
-    const endpoint = apiUrl(`/marketplace/modules/${encodeURIComponent(pkg.id)}/download`);
-    if (pkg.source?.type === "git") {
-      const anchor = document.createElement("a");
-      anchor.href = endpoint;
-      anchor.target = "_blank";
-      anchor.rel = "noopener noreferrer";
-      anchor.click();
-      showToast(
-        LOCAL_STUDIO_MODE
-          ? `${pkg.name} Git 저장소를 엽니다. 안전을 위해 Git 소스는 확인 후 custom_nodes 또는 models 폴더에 직접 설치해 주세요.`
-          : `${pkg.name} Git 저장소를 엽니다.`
-      );
-    } else {
-      try {
-        if (LOCAL_STUDIO_MODE) {
-          const containsExecutableNodes = pkg.kind !== "model-pack";
-          if (
-            containsExecutableNodes
-            && !confirm(
-              `${pkg.name}의 Python 노드 코드를 이 PC에 설치할까요?\n`
-              + "설치된 노드는 catalog 탐색 과정에서 로드되므로 신뢰하는 게시자의 패키지만 설치하세요."
-            )
-          ) return;
-          const metadata = {
-            id: pkg.id,
-            name: pkg.name,
-            version: pkg.version,
-            kind: pkg.kind === "model-pack" ? "model-pack" : "node-pack",
-            sha256: pkg.source?.sha256,
-            nodeTypes: marketplaceNodeTypes(pkg),
-          };
-          const installResponse = await localToolFetch(
-            `packages/${encodeURIComponent(pkg.id)}/install-from-marketplace`,
-            {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(metadata),
-            }
+    try {
+      if (LOCAL_STUDIO_MODE) {
+        const metadata = {
+          id: pkg.id,
+          name: pkg.name,
+          version: pkg.version,
+          kind: pkg.kind === "model-pack" ? "model-pack" : "node-pack",
+          sha256: pkg.source?.sha256 || "0".repeat(64),
+          nodeTypes: marketplaceNodeTypes(pkg),
+          sourceType: pkg.source?.type || "zip",
+          sourcePath: pkg.source?.url || pkg.source?.path || "",
+          installName: marketplaceInstallName(pkg),
+        };
+        const installResponse = await localToolFetch(
+          `packages/${encodeURIComponent(pkg.id)}/install-from-marketplace`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(metadata),
+          }
+        );
+        const installResult = await installResponse.json().catch(() => ({}));
+        if (!installResponse.ok || !installResult.package) {
+          throw new Error(
+            installResult.error?.message
+            || installResult.error
+            || `HTTP ${installResponse.status}`
           );
-          const installResult = await installResponse.json().catch(() => ({}));
-          if (!installResponse.ok || !installResult.package) {
-            throw new Error(
-              installResult.error?.message
-              || installResult.error
-              || `HTTP ${installResponse.status}`
-            );
-          }
-          if (installResult.catalog) {
-            registerCatalog(installResult.catalog, "catalog.json", { silent: true });
-            catalogReady = true;
-            explorerState.connected = true;
-            explorerState.statusMessage = null;
-          } else {
-            await refreshLocalExplorer({ silent: true });
-          }
-          await syncInstalledLocalPackages();
-          await syncLocalPublishablePackages();
-          renderAll();
-          renderSidebarMarketplace();
-          showToast(`${pkg.name} 설치와 노드 목록 갱신을 완료했습니다.`);
-        } else {
-          const response = await apiFetch(`/marketplace/modules/${encodeURIComponent(pkg.id)}/download`);
-          if (!response.ok) {
-            const result = await response.json().catch(() => ({}));
-            throw new Error(responseErrorMessage(response, result));
-          }
-          const blob = await response.blob();
-          const anchor = document.createElement("a");
-          const objectUrl = URL.createObjectURL(blob);
-          anchor.href = objectUrl;
-          anchor.download = pkg.source?.fileName || `${safeId(pkg.name)}.zip`;
-          anchor.click();
-          setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
-          showToast(`${pkg.name} ZIP 다운로드를 시작했습니다.`);
         }
-      } catch (error) {
-        showToast(`${pkg.name} ${LOCAL_STUDIO_MODE ? "설치" : "ZIP 다운로드"} 실패: ${error.message || "서버 연결 오류"}`);
+        if (installResult.catalog) {
+          registerCatalog(installResult.catalog, "catalog.json", { silent: true });
+          catalogReady = true;
+          explorerState.connected = true;
+          explorerState.statusMessage = null;
+        } else {
+          await refreshLocalExplorer({ silent: true });
+        }
+        await syncInstalledLocalPackages();
+        await syncLocalPublishablePackages();
+        renderAll();
+        renderSidebarMarketplace();
+        showToast(`${pkg.name} 설치와 노드 목록 갱신을 완료했습니다.`);
+      } else if (pkg.source?.type === "git") {
+        const anchor = document.createElement("a");
+        anchor.href = apiUrl(`/marketplace/modules/${encodeURIComponent(pkg.id)}/download`);
+        anchor.target = "_blank";
+        anchor.rel = "noopener noreferrer";
+        anchor.click();
+        showToast(`${pkg.name} Git 저장소를 엽니다.`);
+      } else {
+        const response = await apiFetch(`/marketplace/modules/${encodeURIComponent(pkg.id)}/download`);
+        if (!response.ok) {
+          const result = await response.json().catch(() => ({}));
+          throw new Error(responseErrorMessage(response, result));
+        }
+        const blob = await response.blob();
+        const anchor = document.createElement("a");
+        const objectUrl = URL.createObjectURL(blob);
+        anchor.href = objectUrl;
+        anchor.download = pkg.source?.fileName || `${safeId(pkg.name)}.zip`;
+        anchor.click();
+        setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
+        showToast(`${pkg.name} ZIP 다운로드를 시작했습니다.`);
       }
+    } catch (error) {
+      showToast(`${pkg.name} ${LOCAL_STUDIO_MODE ? "설치" : "ZIP 다운로드"} 실패: ${error.message || "서버 연결 오류"}`);
     }
     return;
   }
@@ -3247,6 +3522,51 @@ function prepareNodeTypeMarketplaceRegistration(nodeType) {
   requestAnimationFrame(() => document.getElementById("marketplacePackageName")?.focus());
 }
 
+async function openNodePackageMarketplaceAction(packageId) {
+  if (!requireServerWriteAccess()) return;
+  marketplaceTab = "module";
+  marketplaceFocusPackageId = packageId;
+  marketplaceFocusNodeType = null;
+  moduleRegisterOpen = true;
+  openMarketplaceView();
+  const packages = await syncLocalPublishablePackages({ notify: true });
+  const localPackage = packages.find(pkg => pkg.id === packageId);
+  if (!localPackage) {
+    showToast(`${packageId} 로컬 노드 패키지를 찾지 못했습니다. catalog를 다시 조회해 주세요.`);
+    return;
+  }
+  const existing = registeredMarketplacePackages.find(item => (
+    !item.workflow
+    && item.kind === "node-pack"
+    && (item.id === packageId || marketplaceNodeTypes(item).some(type => localPackage.nodeTypes.includes(type)))
+  ));
+  if (existing?.canManage) {
+    const merge = confirm(`${localPackage.name}은 Marketplace에 이미 등록되어 있습니다.\n\n확인: 기존 등록을 수정/업데이트\n취소: 새 등록 폼에서 이름을 바꿔 준비`);
+    if (merge) {
+      editRegisteredPackage(existing.id);
+      return;
+    }
+  }
+  resetMarketplaceRegisterForm();
+  const form = document.getElementById("marketplaceRegisterForm");
+  if (!form) return;
+  const localSource = form.querySelector('input[name="sourceType"][value="local-package"]');
+  if (localSource) localSource.checked = true;
+  if (form.elements.localPackageId) form.elements.localPackageId.value = localPackage.id;
+  form.elements.name.value = existing ? `${localPackage.name}_copy` : localPackage.name;
+  form.elements.version.value = localPackage.version && isSemanticVersion(localPackage.version)
+    ? localPackage.version
+    : "1.0.0";
+  form.elements.description.value = localPackage.description || `${localPackage.name} 노드 패키지입니다.`;
+  if (form.elements.kind) form.elements.kind.value = "node-pack";
+  if (form.elements.nodeTypes) form.elements.nodeTypes.value = localPackage.nodeTypes.join(", ");
+  if (form.elements.author) form.elements.author.value = authState.user?.displayName || localAuthorProfile || "";
+  syncMarketplaceSourceFields();
+  renderMarketplace();
+  renderMarketplaceNodeSelection();
+  requestAnimationFrame(() => document.getElementById("marketplacePackageName")?.focus());
+}
+
 function openNodeTypeMarketplaceAction(nodeType) {
   const pkg = marketplacePackageForNodeType(nodeType);
   if (pkg?.canManage) {
@@ -3272,6 +3592,7 @@ window.editRegisteredPackage = editRegisteredPackage;
 window.editRegisteredWorkflow = editRegisteredWorkflow;
 window.openWorkflowFileMarketplaceAction = openWorkflowFileMarketplaceAction;
 window.openNodeTypeMarketplaceAction = openNodeTypeMarketplaceAction;
+window.openNodePackageMarketplaceAction = openNodePackageMarketplaceAction;
 
 function syncMarketplaceSourceFields() {
   const sourceType = document.querySelector('input[name="sourceType"]:checked')?.value || "git";
@@ -5900,19 +6221,42 @@ function setupAssetSidebar() {
     <div class="sidebar-tabs" role="tablist" aria-label="자산 목록">
       <button class="sidebar-tab active" type="button" data-asset-tab="workflow" role="tab" aria-selected="true">워크플로우</button>
       <button class="sidebar-tab" type="button" data-asset-tab="node" role="tab" aria-selected="false">노드</button>
+      <button class="sidebar-tab" type="button" data-asset-tab="model" role="tab" aria-selected="false">모델</button>
     </div>
     <div class="asset-pane-stack"></div>
   `;
   sideContent.insertBefore(assetSection, localFilesSection);
   const stack = assetSection.querySelector(".asset-pane-stack");
+  const modelSection = document.createElement("section");
+  modelSection.className = "asset-pane hidden";
+  modelSection.id = "modelAssetSection";
+  modelSection.dataset.assetPane = "model";
+  modelSection.innerHTML = `
+    <div class="section-heading">
+      <div>
+        <span class="eyebrow">MODEL LIBRARY</span>
+        <h2>모델 라이브러리</h2>
+      </div>
+    </div>
+    <p class="section-description">catalog.json에서 확인된 모델 파일을 <code>models</code> 폴더 구조에 따라 표시합니다.</p>
+    <div class="library-search">
+      <label>
+        <span class="material-symbols-outlined" aria-hidden="true">search</span>
+        <input id="modelSearchInput" type="search" placeholder="모델 이름 또는 경로 검색" autocomplete="off" />
+      </label>
+    </div>
+    <div class="nav-list node-library-list" id="modelPalette"></div>
+  `;
 
   [localFilesSection, paletteSection].forEach(section => {
     section.classList.remove("section", "sidebar-hidden");
     section.classList.add("asset-pane");
     stack.appendChild(section);
   });
+  stack.appendChild(modelSection);
   localFilesSection.dataset.assetPane = "workflow";
   paletteSection.dataset.assetPane = "node";
+  modelSection.querySelector("#modelSearchInput")?.addEventListener("input", renderModelPalette);
 
   assetSection.querySelectorAll("[data-asset-tab]").forEach(button => {
     button.addEventListener("click", () => setAssetSidebarTab(button.dataset.assetTab));
@@ -5921,7 +6265,7 @@ function setupAssetSidebar() {
 }
 
 function setAssetSidebarTab(tab, options = {}) {
-  assetSidebarTab = tab === "node" ? "node" : "workflow";
+  assetSidebarTab = ["workflow", "node", "model"].includes(tab) ? tab : "workflow";
   document.querySelectorAll("[data-asset-tab]").forEach(button => {
     const active = button.dataset.assetTab === assetSidebarTab;
     button.classList.toggle("active", active);
@@ -5941,6 +6285,9 @@ function openSidebarSection(sectionId) {
     sectionId = "assetSection";
   } else if (sectionId === "paletteSection") {
     setAssetSidebarTab("node", { scroll: false });
+    sectionId = "assetSection";
+  } else if (sectionId === "modelAssetSection") {
+    setAssetSidebarTab("model", { scroll: false });
     sectionId = "assetSection";
   } else if (sectionId === "marketplaceSection") {
     renderSidebarMarketplace();

@@ -1,11 +1,17 @@
 import importlib
+import importlib.util
 import inspect
 import pkgutil
+import sys
+import types
+from pathlib import Path
 from typing import Any, get_origin
 
 from app.core.loader import get_node_modules
 from app.core.schema import describe_init_inputs, describe_run_io
 from app.node import Node
+
+_MAX_MISSING_DEPENDENCY_STUBS = 20
 
 
 def list_nodes(node_modules=None, json_safe=True):
@@ -44,9 +50,132 @@ def _iter_node_classes(root):
     if not hasattr(package, "__path__"):
         return
 
+    if root == "custom_nodes":
+        yield from _iter_custom_node_classes(package, root)
+        return
+
     for module_info in pkgutil.walk_packages(package.__path__, f"{root}."):
-        module = importlib.import_module(module_info.name)
+        try:
+            module = importlib.import_module(module_info.name)
+        except Exception:
+            continue
         yield from _classes_in_module(module)
+
+
+def _iter_custom_node_classes(package, root):
+    for package_path in package.__path__:
+        base_path = Path(package_path)
+        if not base_path.is_dir():
+            continue
+        for module_path in sorted(base_path.rglob("*.py")):
+            if module_path.name == "__init__.py" or _is_ignored_module_path(module_path, base_path):
+                continue
+            relative_parts = module_path.relative_to(base_path).with_suffix("").parts
+            if not all(part.isidentifier() for part in relative_parts):
+                continue
+            module_name = ".".join((root, *relative_parts))
+            try:
+                module = _load_custom_node_module(module_name, module_path, root, base_path)
+            except Exception:
+                continue
+            _publish_module_exports_to_parent_package(module, module_name)
+            for node_cls in _classes_in_module(module):
+                yield node_cls
+
+
+def _is_ignored_module_path(module_path, base_path):
+    relative_parts = module_path.relative_to(base_path).parts
+    return any(
+        part.startswith(".")
+        or part == "__pycache__"
+        or part in {"node_modules", ".venv", "venv"}
+        for part in relative_parts
+    )
+
+
+def _load_custom_node_module(module_name, module_path, root, base_path):
+    _ensure_synthetic_parent_packages(module_name, root, base_path)
+    missing_dependency_stubs = []
+    try:
+        for _ in range(_MAX_MISSING_DEPENDENCY_STUBS):
+            try:
+                return _exec_module_from_path(module_name, module_path)
+            except ModuleNotFoundError as error:
+                missing_name = _missing_dependency_name(error)
+                if (
+                    not missing_name
+                    or missing_name.startswith("app")
+                    or missing_name.startswith("custom_nodes")
+                    or missing_name in sys.modules
+                ):
+                    raise
+                sys.modules[missing_name] = _MissingDependencyModule(missing_name)
+                missing_dependency_stubs.append(missing_name)
+        raise ImportError(f"Too many missing dependencies while loading {module_name}")
+    finally:
+        for missing_name in missing_dependency_stubs:
+            if isinstance(sys.modules.get(missing_name), _MissingDependencyModule):
+                sys.modules.pop(missing_name, None)
+
+
+def _exec_module_from_path(module_name, module_path):
+    spec = importlib.util.spec_from_file_location(module_name, module_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Could not load {module_name}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _missing_dependency_name(error):
+    name = getattr(error, "name", None)
+    if isinstance(name, str) and name:
+        return name.split(".")[0]
+    return None
+
+
+class _MissingDependencyModule(types.ModuleType):
+    def __getattr__(self, name):
+        placeholder = type(name, (), {})
+        setattr(self, name, placeholder)
+        return placeholder
+
+
+def _ensure_synthetic_parent_packages(module_name, root, base_path):
+    parts = module_name.split(".")
+    for index in range(1, len(parts)):
+        package_name = ".".join(parts[:index])
+        if package_name == root or package_name in sys.modules:
+            continue
+        relative_parts = parts[1:index]
+        package_path = base_path.joinpath(*relative_parts)
+        package = types.ModuleType(package_name)
+        package.__path__ = [str(package_path)]
+        package.__package__ = package_name
+        package.__file__ = str(package_path / "__init__.py")
+        sys.modules[package_name] = package
+
+
+def _publish_module_exports_to_parent_package(module, module_name):
+    parent_name = module_name.rpartition(".")[0]
+    parent = sys.modules.get(parent_name)
+    if parent is None:
+        return
+
+    public_names = getattr(module, "__all__", None)
+    if public_names is None:
+        public_names = [
+            name
+            for name, value in vars(module).items()
+            if not name.startswith("_")
+            and getattr(value, "__module__", None) == module.__name__
+        ]
+
+    for name in public_names:
+        if not isinstance(name, str) or hasattr(parent, name) or not hasattr(module, name):
+            continue
+        setattr(parent, name, getattr(module, name))
 
 
 def _classes_in_module(module):

@@ -459,6 +459,49 @@ def _validate_package_id(value: str) -> str:
     return value
 
 
+def _validate_git_source_path(value: Any) -> str:
+    if not isinstance(value, str):
+        raise BridgeError(
+            HTTPStatus.BAD_REQUEST,
+            "invalid_git_source",
+            "Git 소스 경로가 필요합니다.",
+        )
+    source = value.strip()
+    if (
+        not source
+        or len(source) > 2_000
+        or _CONTROL_CHARACTER_PATTERN.search(source)
+    ):
+        raise BridgeError(
+            HTTPStatus.BAD_REQUEST,
+            "invalid_git_source",
+            "Git 소스 경로가 올바르지 않습니다.",
+        )
+    if source.startswith(("git@github.com:", "git@gitlab.com:", "git@bitbucket.org:")):
+        if any(token in source for token in ("..", "?", "#", "&", "|", ";")):
+            raise BridgeError(
+                HTTPStatus.BAD_REQUEST,
+                "invalid_git_source",
+                "Git SSH 경로에 허용되지 않는 문자가 있습니다.",
+            )
+        return source
+    parsed = urlsplit(source)
+    if (
+        parsed.scheme not in {"https", "ssh", "git"}
+        or not parsed.netloc
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise BridgeError(
+            HTTPStatus.BAD_REQUEST,
+            "invalid_git_source",
+            "HTTPS, SSH 또는 git@ 형식의 Git 주소만 사용할 수 있습니다.",
+        )
+    return source
+
+
 def _safe_workflow_relative_path(value: str) -> Path:
     """Return a safe workflow path relative to workflows/.
 
@@ -1070,11 +1113,12 @@ class BridgeState:
         )
 
     def list_local_custom_node_packages(self) -> list[dict[str, Any]]:
-        """List top-level custom_nodes directories and catalog-confirmed nodes."""
+        """List custom_nodes package repos and catalog-confirmed nodes."""
 
         with self.catalog_lock:
             catalog = self._read_catalog_unlocked()
         node_types_by_package: dict[str, list[str]] = {}
+        node_base_by_package: dict[str, str] = {}
         for node in catalog.get("nodes", []):
             if not isinstance(node, dict):
                 continue
@@ -1085,32 +1129,69 @@ class BridgeState:
             module_parts = module_name.split(".")
             if len(module_parts) < 2 or module_parts[0] != "custom_nodes":
                 continue
-            package_id = module_parts[1]
+            if len(module_parts) >= 3 and module_parts[1] in {"develop", "market"}:
+                package_id = module_parts[2]
+                package_base = module_parts[1]
+            else:
+                package_id = module_parts[1]
+                package_base = ""
             try:
                 _validate_package_id(package_id)
             except BridgeError:
                 continue
+            existing_base = node_base_by_package.get(package_id)
+            if existing_base and existing_base != package_base:
+                if existing_base == "develop":
+                    continue
+                if package_base == "develop":
+                    node_types_by_package[package_id] = []
             node_types_by_package.setdefault(package_id, []).append(node_type)
+            node_base_by_package[package_id] = package_base
 
         package_root = self.package_roots["node-pack"]
         packages: list[dict[str, Any]] = []
-        package_ids: set[str] = set(node_types_by_package)
+        package_paths: dict[str, Path] = {}
         if package_root.is_dir():
             for candidate in package_root.iterdir():
                 if not candidate.is_dir() or _path_is_linklike(candidate):
                     continue
-                try:
-                    package_ids.add(_validate_package_id(candidate.name))
-                except BridgeError:
-                    continue
-        for package_id in sorted(package_ids, key=str.casefold):
+                if candidate.name in {"develop", "market"}:
+                    for repo_candidate in candidate.iterdir():
+                        if not repo_candidate.is_dir() or _path_is_linklike(repo_candidate):
+                            continue
+                        try:
+                            package_id = _validate_package_id(repo_candidate.name)
+                        except BridgeError:
+                            continue
+                        if package_id not in package_paths or candidate.name == "develop":
+                            package_paths[package_id] = repo_candidate
+                else:
+                    try:
+                        package_id = _validate_package_id(candidate.name)
+                    except BridgeError:
+                        continue
+                    package_paths[package_id] = candidate
+        for package_id in node_types_by_package:
+            if package_id in package_paths:
+                continue
+            base = node_base_by_package.get(package_id, "")
+            if base:
+                package_paths[package_id] = package_root / base / package_id
+            else:
+                package_paths[package_id] = package_root / package_id
+        for package_id in sorted(package_paths, key=str.casefold):
             node_types = node_types_by_package.get(package_id, [])
-            candidate = package_root / package_id
+            candidate = package_paths[package_id]
             if (
                 not candidate.is_dir()
                 or _path_is_linklike(candidate)
-                or candidate.parent != package_root
             ):
+                continue
+            try:
+                install_path = candidate.resolve(strict=True).relative_to(
+                    self.asset_root
+                ).as_posix()
+            except (OSError, ValueError):
                 continue
             files, total_size = self._collect_local_custom_node_files(candidate)
             if not any(
@@ -1121,10 +1202,10 @@ class BridgeState:
             packages.append(
                 {
                     "id": package_id,
-                    "name": package_id,
+                    "name": candidate.name,
                     "kind": "node-pack",
                     "source": "custom_nodes",
-                    "installPath": f"custom_nodes/{package_id}",
+                    "installPath": install_path,
                     "nodeTypes": sorted(set(node_types), key=str.casefold),
                     "fileCount": len(files),
                     "size": total_size,
@@ -1151,18 +1232,25 @@ class BridgeState:
         """Archive one catalog-confirmed top-level custom_nodes package."""
 
         local_package = self.local_custom_node_package(package_id)
-        package_root = self.package_roots["node-pack"] / local_package["id"]
+        package_root = (self.asset_root / local_package["installPath"]).resolve()
         with self.package_lock:
             if (
                 not package_root.is_dir()
                 or _path_is_linklike(package_root)
-                or package_root.parent != self.package_roots["node-pack"]
             ):
                 raise BridgeError(
                     HTTPStatus.NOT_FOUND,
                     "local_custom_node_package_not_found",
                     "선택한 custom_nodes 패키지를 찾을 수 없습니다.",
                 )
+            try:
+                package_root.relative_to(self.package_roots["node-pack"])
+            except ValueError as error:
+                raise BridgeError(
+                    HTTPStatus.BAD_REQUEST,
+                    "local_custom_node_package_invalid",
+                    "custom_nodes package path is invalid.",
+                ) from error
             files, total_size = self._collect_local_custom_node_files(
                 package_root
             )
@@ -1431,7 +1519,8 @@ class BridgeState:
                 "지원하지 않는 설치 채널입니다.",
             )
         target_parent = package_root / install_channel if install_channel else package_root
-        target = target_parent / metadata["id"]
+        target_name = metadata["id"]
+        target = target_parent / target_name
 
         with self.package_lock:
             try:
@@ -1577,6 +1666,205 @@ class BridgeState:
                     HTTPStatus.UNPROCESSABLE_ENTITY,
                     "package_install_failed",
                     "패키지를 안전하게 설치하지 못했습니다.",
+                ) from error
+            finally:
+                self._remove_local_path(staging)
+
+            self._remove_local_path(backup)
+            return {
+                "ok": True,
+                "package": package,
+                "catalog": catalog,
+            }
+
+    def install_git_marketplace_package(
+        self,
+        metadata: dict[str, Any],
+        git_source_path: str,
+        *,
+        install_name: str = "",
+    ) -> dict[str, Any]:
+        """Clone one Marketplace Git node package into custom_nodes/market."""
+
+        if metadata["kind"] != "node-pack":
+            raise BridgeError(
+                HTTPStatus.UNPROCESSABLE_ENTITY,
+                "git_package_kind_invalid",
+                "Git Marketplace 설치는 노드 패키지만 지원합니다.",
+            )
+        source_path = _validate_git_source_path(git_source_path)
+        package_root = self.package_roots["node-pack"]
+        target_parent = package_root / "market"
+        target_name = _validate_package_id(install_name or metadata["id"])
+        target = target_parent / target_name
+
+        with self.package_lock:
+            try:
+                if _path_is_linklike(target_parent):
+                    raise OSError("symbolic-link package channel")
+                target_parent.mkdir(parents=True, exist_ok=True)
+                resolved_target_parent = target_parent.resolve(strict=True)
+            except (OSError, RuntimeError, ValueError) as error:
+                raise BridgeError(
+                    HTTPStatus.UNPROCESSABLE_ENTITY,
+                    "package_install_channel_invalid",
+                    "패키지 설치 폴더를 준비할 수 없습니다.",
+                ) from error
+            if (
+                not resolved_target_parent.is_dir()
+                or resolved_target_parent.parent != package_root
+            ):
+                raise BridgeError(
+                    HTTPStatus.UNPROCESSABLE_ENTITY,
+                    "package_install_channel_invalid",
+                    "패키지 설치 폴더가 custom_nodes 바로 아래의 안전한 폴더가 아닙니다.",
+                )
+            if _path_is_linklike(target) or (target.exists() and not target.is_dir()):
+                raise BridgeError(
+                    HTTPStatus.CONFLICT,
+                    "package_target_invalid",
+                    "패키지 설치 대상은 실제 폴더여야 합니다.",
+                )
+            staging = Path(
+                tempfile.mkdtemp(
+                    prefix=f".{metadata['id']}.git-install-",
+                    dir=target_parent,
+                )
+            )
+            backup = target_parent / (
+                f".{metadata['id']}.backup-{secrets.token_hex(12)}"
+            )
+            target_was_moved = False
+            new_target_installed = False
+            try:
+                previous_catalog = (
+                    self.catalog_path.read_bytes()
+                    if self.catalog_path.is_file()
+                    else None
+                )
+            except OSError as error:
+                self._remove_local_path(staging)
+                raise BridgeError(
+                    HTTPStatus.INTERNAL_SERVER_ERROR,
+                    "catalog_backup_failed",
+                    "패키지 설치 전 기존 catalog.json을 백업하지 못했습니다.",
+                ) from error
+            try:
+                clone = subprocess.run(
+                    ["git", "clone", "--depth", "1", source_path, str(staging)],
+                    cwd=self.root,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=120,
+                    shell=False,
+                )
+                if clone.returncode != 0:
+                    raise BridgeError(
+                        HTTPStatus.UNPROCESSABLE_ENTITY,
+                        "git_package_clone_failed",
+                        "Git 노드 패키지를 내려받지 못했습니다.",
+                        details={
+                            "stderr": (clone.stderr or clone.stdout or "")[-4000:],
+                        },
+                    )
+                commit = subprocess.run(
+                    ["git", "-C", str(staging), "rev-parse", "HEAD"],
+                    cwd=self.root,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=10,
+                    shell=False,
+                )
+                revision = commit.stdout.strip() if commit.returncode == 0 else ""
+                self._remove_local_path(staging / ".git")
+                installed_at = datetime.now(timezone.utc).isoformat()
+                package = {
+                    **metadata,
+                    "sha256": hashlib.sha256(
+                        f"{source_path}\n{revision}".encode("utf-8")
+                    ).hexdigest(),
+                    "installPath": target.relative_to(self.asset_root).as_posix(),
+                    "installedAt": installed_at,
+                }
+                (staging / PACKAGE_MANIFEST_FILENAME).write_text(
+                    json.dumps(
+                        {
+                            "schema": "infrax.package.v1",
+                            **package,
+                            "source": {"type": "git", "path": source_path},
+                            "revision": revision,
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                if target.exists():
+                    os.replace(target, backup)
+                    target_was_moved = True
+                os.replace(staging, target)
+                new_target_installed = True
+                refreshed = self.refresh_catalog()
+                discovered_node_types = {
+                    str(node.get("key"))
+                    for node in refreshed["catalog"].get("nodes", [])
+                    if isinstance(node, dict) and node.get("key")
+                }
+                missing_node_types = sorted(
+                    set(package["nodeTypes"]) - discovered_node_types
+                )
+                if missing_node_types:
+                    raise BridgeError(
+                        HTTPStatus.UNPROCESSABLE_ENTITY,
+                        "package_catalog_mismatch",
+                        "설치한 Git 노드 패키지의 선언 노드를 catalog.py에서 찾지 못했습니다.",
+                        details={"missingNodeTypes": missing_node_types[:100]},
+                    )
+                catalog = self._annotate_catalog_packages(
+                    refreshed["catalog"],
+                    extra_package=package,
+                )
+                packages = [
+                    current
+                    for current in self._read_package_registry_unlocked()
+                    if current["id"] != package["id"]
+                ]
+                packages.append(package)
+                self._write_package_registry_unlocked(packages)
+            except BridgeError as error:
+                try:
+                    self._rollback_package_install(
+                        target=target,
+                        backup=backup,
+                        target_was_moved=target_was_moved,
+                        new_target_installed=new_target_installed,
+                        previous_catalog=previous_catalog,
+                    )
+                except BridgeError as rollback_error:
+                    raise rollback_error from error
+                raise
+            except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+                try:
+                    self._rollback_package_install(
+                        target=target,
+                        backup=backup,
+                        target_was_moved=target_was_moved,
+                        new_target_installed=new_target_installed,
+                        previous_catalog=previous_catalog,
+                    )
+                except BridgeError as rollback_error:
+                    raise rollback_error from error
+                raise BridgeError(
+                    HTTPStatus.UNPROCESSABLE_ENTITY,
+                    "git_package_install_failed",
+                    "Git 노드 패키지를 안전하게 설치하지 못했습니다.",
                 ) from error
             finally:
                 self._remove_local_path(staging)
@@ -1974,16 +2262,21 @@ class BridgeState:
         )
         install_path = value.get("installPath")
         package_root = self.package_roots[metadata["kind"]]
-        expected_paths = {
-            (package_root / metadata["id"]).relative_to(self.asset_root).as_posix()
-        }
-        if metadata["kind"] == "node-pack":
-            expected_paths.add(
-                (package_root / "market" / metadata["id"])
-                .relative_to(self.asset_root)
-                .as_posix()
-            )
-        if install_path not in expected_paths:
+        if not isinstance(install_path, str):
+            raise ValueError("invalid install path")
+        candidate = (self.asset_root / install_path).resolve()
+        try:
+            relative_candidate = candidate.relative_to(package_root)
+        except ValueError as error:
+            raise ValueError("invalid install path") from error
+        path_parts = relative_candidate.parts
+        if metadata["kind"] == "node-pack" and len(path_parts) == 2:
+            if path_parts[0] != "market":
+                raise ValueError("invalid install path")
+            _validate_package_id(path_parts[1])
+        elif len(path_parts) == 1 and path_parts[0] == metadata["id"]:
+            pass
+        else:
             raise ValueError("invalid install path")
         installed_at = value.get("installedAt")
         if not isinstance(installed_at, str) or len(installed_at) > 64:
@@ -3433,6 +3726,13 @@ class BridgeState:
         environment["PYTHONIOENCODING"] = "utf-8"
         environment["PYTHONUTF8"] = "1"
         environment["INFRAX_ASSET_ROOT"] = os.fspath(self.asset_root)
+        asset_root = os.fspath(self.asset_root)
+        existing_path = environment.get("PYTHONPATH")
+        environment["PYTHONPATH"] = (
+            asset_root
+            if not existing_path
+            else asset_root + os.pathsep + existing_path
+        )
         executable = python_executable if python_executable and python_executable.is_file() else Path(sys.executable)
         try:
             return subprocess.run(
@@ -3917,10 +4217,31 @@ class StudioBridgeHandler(BaseHTTPRequestHandler):
                 and segments[2] == "install-from-marketplace"
             ):
                 package_id = self._decode_package_id(segments[1])
+                request_body = self._read_json_body()
                 metadata = _validate_package_metadata(
-                    self._read_json_body(),
+                    {
+                        key: request_body.get(key)
+                        for key in (
+                            "id",
+                            "name",
+                            "version",
+                            "kind",
+                            "sha256",
+                            "nodeTypes",
+                        )
+                    },
                     expected_id=package_id,
                 )
+                if request_body.get("sourceType") == "git":
+                    self._send_json(
+                        HTTPStatus.OK,
+                        state.install_git_marketplace_package(
+                            metadata,
+                            request_body.get("sourcePath"),
+                            install_name=str(request_body.get("installName") or ""),
+                        ),
+                    )
+                    return
                 archive_path, archive_digest = (
                     self._download_marketplace_package_archive(
                         state,
