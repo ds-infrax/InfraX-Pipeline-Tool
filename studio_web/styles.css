@@ -2655,8 +2655,8 @@ textarea:hover {
 
 .marketplace-tabs {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
   padding: 8px;
   border-radius: 16px;
   background: var(--surface-mid);
@@ -2664,10 +2664,11 @@ textarea:hover {
 
 .marketplace-tab {
   display: flex;
-  min-height: 78px;
+  min-width: 0;
+  min-height: 70px;
   align-items: center;
-  gap: 14px;
-  padding: 14px 18px;
+  gap: 10px;
+  padding: 12px 14px;
   border-radius: 11px;
   background: transparent;
   color: var(--on-surface-variant);
@@ -2686,19 +2687,26 @@ textarea:hover {
 
 .marketplace-tab > span:last-child {
   display: flex;
+  min-width: 0;
   flex-direction: column;
 }
 
 .marketplace-tab b {
+  overflow: hidden;
   color: var(--on-surface);
   font-size: 14px;
   font-weight: 850;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .marketplace-tab small {
+  overflow: hidden;
   margin-top: 2px;
   color: var(--muted);
   font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .marketplace-tab.active {

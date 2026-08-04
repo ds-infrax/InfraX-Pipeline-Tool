@@ -2441,6 +2441,7 @@ function applyLocalPublishablePackageSelection() {
   const packageId = String(form?.elements.localPackageId?.value || "");
   const pkg = localPublishablePackages.find(item => item.id === packageId);
   if (!form || !pkg) return;
+  marketplaceFocusPackageId = pkg.id;
   form.elements.name.value = pkg.name;
   if (pkg.version && isSemanticVersion(pkg.version)) {
     form.elements.version.value = pkg.version;
@@ -2450,6 +2451,24 @@ function applyLocalPublishablePackageSelection() {
   form.elements.nodeTypes.value = pkg.nodeTypes.join(", ");
   if (pkg.author && !authState.user) form.elements.author.value = pkg.author;
   renderMarketplaceNodeSelection();
+}
+
+async function prepareDefaultLocalPackageRegistration() {
+  if (!LOCAL_STUDIO_MODE || marketplaceTab !== "module") return false;
+  const packages = await syncLocalPublishablePackages({ notify: false });
+  const form = document.getElementById("marketplaceRegisterForm");
+  if (!form || !packages.length) return false;
+  const localSource = form.querySelector('input[name="sourceType"][value="local-package"]');
+  if (localSource) localSource.checked = true;
+  const select = form.elements.localPackageId;
+  if (select && !select.value) {
+    select.value = marketplaceFocusPackageId && packages.some(pkg => pkg.id === marketplaceFocusPackageId)
+      ? marketplaceFocusPackageId
+      : packages[0].id;
+  }
+  applyLocalPublishablePackageSelection();
+  syncMarketplaceSourceFields();
+  return true;
 }
 
 function isPackageMarketplaceTab(tab) {
@@ -6697,6 +6716,7 @@ function displayNodeTitle(node) {
 
 function resetMarketplaceRegisterForm() {
   editingModulePackageId = null;
+  marketplaceFocusPackageId = null;
   const form = document.getElementById("marketplaceRegisterForm");
   form?.reset();
   if (form?.elements.version) form.elements.version.value = "1.0.0";
@@ -7268,7 +7288,13 @@ document.getElementById("developerToolsBtn")?.addEventListener("click", openDeve
 document.getElementById("closeDeveloperToolsBtn")?.addEventListener("click", closeDeveloperTools);
 document.getElementById("closeHistoryBtn")?.addEventListener("click", closeHistoryPanel);
 document.getElementById("drawerScrim")?.addEventListener("click", closeHistoryPanel);
-document.getElementById("openModuleRegisterBtn")?.addEventListener("click", toggleModuleRegisterPanel);
+document.getElementById("openModuleRegisterBtn")?.addEventListener("click", async () => {
+  toggleModuleRegisterPanel();
+  if (moduleRegisterOpen) {
+    const prepared = await prepareDefaultLocalPackageRegistration();
+    if (prepared) renderMarketplace();
+  }
+});
 document.getElementById("recoverLegacyDraftBtn")?.addEventListener("click", recoverLegacyDraft);
 document.getElementById("retryAuthStartupBtn")?.addEventListener("click", () => window.location.reload());
 document.getElementById("refreshExplorerBtn")?.addEventListener("click", refreshLocalExplorer);
